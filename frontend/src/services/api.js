@@ -4,7 +4,7 @@ import axios from 'axios';
 const API_BASE_URL = import.meta.env.VITE_API_URL ||
     (window.location.hostname === 'localhost'
         ? 'http://localhost:8000'
-        : 'https://econova-backend.onrender.com');
+        : 'https://econova-backend-ybiq.onrender.com');
 
 const default_api = axios.create({
     baseURL: API_BASE_URL,
