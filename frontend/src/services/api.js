@@ -158,4 +158,4 @@ export const openAuction = async (ticker) => {
     return response.data;
 }
 
-export default api;
+export default default_api;
