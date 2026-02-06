@@ -2,7 +2,7 @@ import math
 import random
 from datetime import datetime
 from sqlmodel import Session, select, func
-from .models import Asset, MarketState, Order, OrderStatus, OrderType, User, Holding, TeamLoan, LoanStatus, AuctionBid, PriceHistory, Role
+from .models import Asset, MarketState, Order, OrderStatus, OrderType, User, Holding, TeamLoan, LoanStatus, AuctionBid, PriceHistory, Role, AuctionLot, LotStatus
 
 class NewsCaster:
     TEMPLATES = {
@@ -191,12 +191,52 @@ class MarketEngine:
         self.session.add(state)
         self.session.commit()
 
-    # --- AUCTION LOGIC ---
+    # --- AUCTION LOGIC (MULTI-LOT SYSTEM) ---
+    
+    # Lot configurations: {ticker: [(quantity, base_price_multiplier), ...]}
+    LOT_CONFIGS = {
+        'GOLD': [(10, 1.0), (15, 1.0), (20, 1.0)],  # tonnes
+        'TECH': [(50, 1.0), (75, 1.0), (100, 1.0)],  # shares
+        'OIL': [(100, 1.0), (150, 1.0), (200, 1.0)],  # barrels
+        'REAL': [(5, 1.0), (10, 1.0)],  # properties
+        'BOND': [(100, 1.0), (200, 1.0), (300, 1.0)]  # units
+    }
+    
+    def create_auction_lots(self, ticker: str):
+        """Create multiple lots for an asset auction"""
+        asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
+        if not asset:
+            raise ValueError(f"Asset {ticker} not found")
+        
+        # Clear old lots
+        old_lots = self.session.exec(select(AuctionLot).where(AuctionLot.asset_ticker == ticker)).all()
+        for lot in old_lots:
+            self.session.delete(lot)
+        
+        # Create new lots based on configuration
+        lot_config = self.LOT_CONFIGS.get(ticker, [(10, 1.0)])  # Default config
+        
+        for lot_num, (quantity, price_mult) in enumerate(lot_config, 1):
+            lot = AuctionLot(
+                asset_ticker=ticker,
+                lot_number=lot_num,
+                quantity=quantity,
+                base_price=asset.base_price * price_mult,
+                status=LotStatus.ACTIVE
+            )
+            self.session.add(lot)
+        
+        self.session.commit()
+    
     def start_auction(self, ticker: str):
+        """Start auction with multiple lots"""
         state = self.get_state()
         state.phase = "AUCTION"
         state.active_auction_asset = ticker
-        state.news_feed = f"🚨 AUCTION OPEN: {ticker} on the block!"
+        state.news_feed = f"🚨 AUCTION OPEN: {ticker} - Multiple lots available!"
+        
+        # Create lots for this auction
+        self.create_auction_lots(ticker)
         
         # Clear old bids
         old_bids = self.session.exec(select(AuctionBid).where(AuctionBid.asset_ticker == ticker)).all()
@@ -205,90 +245,139 @@ class MarketEngine:
         
         self.session.add(state)
         self.session.commit()
-
-    def place_bid(self, user: User, amount: float):
+    
+    def place_bid(self, user: User, lot_id: int, amount: float):
+        """Place bid on a specific lot"""
         state = self.get_state()
         ticker = state.active_auction_asset
-        if not ticker: raise ValueError("No active auction")
+        if not ticker:
+            raise ValueError("No active auction")
         
-        asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
-        lot_size = 10 if ticker in ['TECH', 'GOLD'] else 100 # Simplified lot map
+        # Get the lot
+        lot = self.session.get(AuctionLot, lot_id)
+        if not lot or lot.asset_ticker != ticker:
+            raise ValueError("Invalid lot")
         
-        total_cost = amount * lot_size
+        if lot.status != LotStatus.ACTIVE:
+            raise ValueError("Lot is not active")
+        
+        # Check if bid is at least base price
+        if amount < lot.base_price:
+            raise ValueError(f"Bid must be at least ${lot.base_price:,.2f}")
+        
+        total_cost = amount * lot.quantity
         if user.cash < total_cost:
             raise ValueError(f"Insufficient funds. Need ${total_cost:,.0f}")
-            
-        # Check if already highest logic handled in frontend or allowed to overbid self?
-        # Simple insert
-        bid = AuctionBid(user_id=user.id, asset_ticker=ticker, amount=amount, quantity=lot_size)
+        
+        # Create bid
+        bid = AuctionBid(
+            user_id=user.id,
+            asset_ticker=ticker,
+            lot_id=lot_id,
+            amount=amount,
+            quantity=lot.quantity
+        )
         self.session.add(bid)
         self.session.commit()
-
+    
     def resolve_auction(self):
+        """Resolve auction - award each lot to highest bidder"""
         state = self.get_state()
         ticker = state.active_auction_asset
-        if not ticker: return "No asset"
+        if not ticker:
+            return "No active auction"
         
-        # Find winner
-        bids = self.session.exec(select(AuctionBid).where(AuctionBid.asset_ticker == ticker).order_by(AuctionBid.amount.desc())).all()
+        asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
+        if not asset:
+            return "Asset not found"
         
-        msg = f"Auction for {ticker} ended."
-        if bids:
-            winner_bid = bids[0]
-            winner = self.session.get(User, winner_bid.user_id)
+        # Get all active lots
+        lots = self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.status == LotStatus.ACTIVE
+            )
+        ).all()
+        
+        results = []
+        total_volume = 0
+        weighted_price_sum = 0
+        
+        for lot in lots:
+            # Find highest bid for this lot
+            bids = self.session.exec(
+                select(AuctionBid).where(
+                    AuctionBid.lot_id == lot.id
+                ).order_by(AuctionBid.amount.desc())
+            ).all()
             
-            # Get the asset first
-            asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
-            if not asset:
-                return "Asset not found"
-            
-            total_cost = winner_bid.amount * winner_bid.quantity
-            
-            # Check if winner has enough cash
-            if winner.cash < total_cost:
-                msg = f"Auction failed: {winner.username} has insufficient funds"
-                state.active_auction_asset = None
-                state.news_feed = msg
-                self.session.add(state)
-                self.session.commit()
-                return msg
-            
-            # Transact
-            winner.cash -= total_cost
-            
-            # Update/Create Holding
-            holding = self.session.exec(select(Holding).where(
-                Holding.user_id == winner.id, 
-                Holding.asset_id == asset.id
-            )).first()
-            
-            if holding:
-                # Weighted Avg Cost
-                total_val = (holding.quantity * holding.avg_cost) + total_cost
-                new_qty = holding.quantity + winner_bid.quantity
-                holding.avg_cost = total_val / new_qty
-                holding.quantity = new_qty
-                self.session.add(holding)
+            if bids:
+                winner_bid = bids[0]
+                winner = self.session.get(User, winner_bid.user_id)
+                
+                total_cost = winner_bid.amount * winner_bid.quantity
+                
+                # Check funds
+                if winner.cash >= total_cost:
+                    # Execute transaction
+                    winner.cash -= total_cost
+                    
+                    # Update/Create Holding
+                    holding = self.session.exec(select(Holding).where(
+                        Holding.user_id == winner.id,
+                        Holding.asset_id == asset.id
+                    )).first()
+                    
+                    if holding:
+                        total_val = (holding.quantity * holding.avg_cost) + total_cost
+                        new_qty = holding.quantity + winner_bid.quantity
+                        holding.avg_cost = total_val / new_qty
+                        holding.quantity = new_qty
+                        self.session.add(holding)
+                    else:
+                        holding = Holding(
+                            user_id=winner.id,
+                            asset_id=asset.id,
+                            quantity=winner_bid.quantity,
+                            avg_cost=winner_bid.amount
+                        )
+                        self.session.add(holding)
+                    
+                    # Update lot
+                    lot.status = LotStatus.SOLD
+                    lot.winner_id = winner.id
+                    lot.winning_bid = winner_bid.amount
+                    
+                    self.session.add(winner)
+                    self.session.add(lot)
+                    
+                    # Track for price update
+                    total_volume += winner_bid.quantity
+                    weighted_price_sum += winner_bid.amount * winner_bid.quantity
+                    
+                    results.append(f"Lot {lot.lot_number}: {winner.username} @ ${winner_bid.amount:,.0f}")
+                else:
+                    lot.status = LotStatus.CANCELLED
+                    self.session.add(lot)
+                    results.append(f"Lot {lot.lot_number}: No sale (insufficient funds)")
             else:
-                holding = Holding(
-                    user_id=winner.id, 
-                    asset_id=asset.id, 
-                    quantity=winner_bid.quantity, 
-                    avg_cost=winner_bid.amount
-                )
-                self.session.add(holding)
-            
-            # Update Market Price (Weighted)
-            asset.current_price = (0.7 * asset.current_price) + (0.3 * winner_bid.amount)
-            
-            msg = f"SOLD! {ticker} to {winner.username} @ ${winner_bid.amount:,.0f}"
-            self.session.add(winner)
+                lot.status = LotStatus.CANCELLED
+                self.session.add(lot)
+                results.append(f"Lot {lot.lot_number}: No bids")
+        
+        # Update market price based on weighted average of winning bids
+        if total_volume > 0:
+            avg_winning_price = weighted_price_sum / total_volume
+            asset.current_price = (0.7 * asset.current_price) + (0.3 * avg_winning_price)
             self.session.add(asset)
-            
+        
+        msg = f"Auction for {ticker} completed. " + "; ".join(results)
         state.active_auction_asset = None
         state.news_feed = msg
+        state.phase = "TRADING"
         self.session.add(state)
         self.session.commit()
+        
         return msg
 
     # --- TRADING LOGIC ---

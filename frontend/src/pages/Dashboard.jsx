@@ -7,12 +7,19 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
 import CreditNetwork from '../components/CreditNetwork';
 import PriceChart from '../components/PriceChart';
+import ConsentForm from '../components/ConsentForm';
+import AdminPriceNudge from '../components/AdminPriceNudge';
+import AdminCredentials from '../components/AdminCredentials';
+import TeamPasswordChange from '../components/TeamPasswordChange';
+import LoginStatus from '../components/LoginStatus';
+import TeamManagement from '../components/TeamManagement';
+import DataExport from '../components/DataExport';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -22,6 +29,7 @@ export default function Dashboard() {
     const [portfolio, setPortfolio] = useState([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('portfolio');
+    const [hasConsented, setHasConsented] = useState(true); // Default true to avoid blocking
 
     // Admin State
     const [adminUsers, setAdminUsers] = useState([]);
@@ -47,6 +55,16 @@ export default function Dashboard() {
             setMarketState(marketData);
             setAssets(assetsData);
             setPortfolio(portfolioData);
+
+            // Check consent status for team users
+            if (userData.role === 'team') {
+                try {
+                    const consentStatus = await checkConsentStatus();
+                    setHasConsented(consentStatus.has_consented);
+                } catch (err) {
+                    console.error('Failed to check consent:', err);
+                }
+            }
 
             // Preserve selected asset across refreshes using ref
             if (selectedAssetTickerRef.current && assetsData.length > 0) {
@@ -182,6 +200,14 @@ export default function Dashboard() {
     // Admin Items
     if (user.role === 'admin') {
         sidebarItems.push({ id: 'admin_panel', label: 'ADMIN CONTROL', icon: ShieldAlert });
+    } else {
+        // Team users get settings option
+        sidebarItems.push({ id: 'settings', label: 'SETTINGS', icon: ShieldAlert });
+    }
+
+    // Show consent form if user hasn't consented
+    if (!hasConsented && user.role === 'team') {
+        return <ConsentForm onConsentAccepted={() => setHasConsented(true)} />;
     }
 
     return (
@@ -361,53 +387,52 @@ export default function Dashboard() {
                                 transition={{ duration: 0.2 }}
                             >
                                 {activeTab === 'admin_panel' && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-                                        <div>
-                                            <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Team Management</h2>
-                                            <div className="fintech-card">
-                                                <div className="text-label">Active Teams</div>
-                                                <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                                                    {adminUsers.map(u => (
-                                                        <div key={u.id} className="flex-between" style={{ padding: '0.75rem 0', borderBottom: '1px solid #eee' }}>
-                                                            <div>
-                                                                <div style={{ fontWeight: 700 }}>{u.username}</div>
-                                                                <div style={{ fontSize: '0.8rem', color: '#666' }}>Cash: ${u.cash.toLocaleString()}</div>
-                                                            </div>
-                                                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                                                <span style={{ fontSize: '0.7rem', color: u.is_frozen ? 'red' : 'green', fontWeight: 700 }}>{u.is_frozen ? 'FROZEN' : 'ACTIVE'}</span>
-                                                                <button onClick={() => handleFreeze(u.id)} className="btn btn-secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.7rem' }}>
-                                                                    {u.is_frozen ? 'UNFREEZE' : 'FREEZE'}
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
+                                    <div>
+                                        <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Admin Control Panel</h2>
+
+                                        {/* Login Status Monitor */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <LoginStatus />
                                         </div>
 
-                                        <div>
-                                            <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Create Team</h2>
-                                            <div className="fintech-card">
-                                                <form onSubmit={handleCreateTeam}>
-                                                    <div style={{ marginBottom: '1rem' }}>
-                                                        <label className="text-label">Team Name</label>
-                                                        <input className="input-field" value={newTeam.username} onChange={e => setNewTeam({ ...newTeam, username: e.target.value })} />
-                                                    </div>
-                                                    <div style={{ marginBottom: '1rem' }}>
-                                                        <label className="text-label">Password</label>
-                                                        <input className="input-field" type="password" value={newTeam.password} onChange={e => setNewTeam({ ...newTeam, password: e.target.value })} />
-                                                    </div>
-                                                    <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>REGISTER TEAM</button>
-                                                </form>
-                                            </div>
+                                        {/* New Admin Tools */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', marginBottom: '2rem' }}>
+                                            <AdminPriceNudge />
+                                            <AdminCredentials />
+                                        </div>
 
-                                            <div style={{ marginTop: '2rem' }}>
-                                                <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Global Controls</h2>
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <DataExport />
+                                        </div>
+
+                                        {/* Existing Team Management */}
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+                                            <TeamManagement teams={adminUsers} onUpdate={fetchData} />
+
+                                            <div>
+                                                <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Create Team</h2>
                                                 <div className="fintech-card">
-                                                    <button onClick={handleNextTurn} className="btn" style={{ width: '100%', background: '#000', color: '#FFF', marginBottom: '1rem' }}>ADVANCE FISCAL YEAR</button>
-                                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                                                        <button onClick={() => handleShock('INFLATION', 'HINT')} className="btn btn-secondary">HINT INFLATION</button>
-                                                        <button onClick={() => handleShock('RECESSION', 'HINT')} className="btn btn-secondary">HINT RECESSION</button>
+                                                    <form onSubmit={handleCreateTeam}>
+                                                        <div style={{ marginBottom: '1rem' }}>
+                                                            <label className="text-label">Team Name</label>
+                                                            <input className="input-field" value={newTeam.username} onChange={e => setNewTeam({ ...newTeam, username: e.target.value })} />
+                                                        </div>
+                                                        <div style={{ marginBottom: '1rem' }}>
+                                                            <label className="text-label">Password</label>
+                                                            <input className="input-field" type="password" value={newTeam.password} onChange={e => setNewTeam({ ...newTeam, password: e.target.value })} />
+                                                        </div>
+                                                        <button type="submit" className="btn btn-primary" style={{ width: '100%' }}>REGISTER TEAM</button>
+                                                    </form>
+                                                </div>
+
+                                                <div style={{ marginTop: '2rem' }}>
+                                                    <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Global Controls</h2>
+                                                    <div className="fintech-card">
+                                                        <button onClick={handleNextTurn} className="btn" style={{ width: '100%', background: '#000', color: '#FFF', marginBottom: '1rem' }}>ADVANCE FISCAL YEAR</button>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                                            <button onClick={() => handleShock('INFLATION', 'HINT')} className="btn btn-secondary">HINT INFLATION</button>
+                                                            <button onClick={() => handleShock('RECESSION', 'HINT')} className="btn btn-secondary">HINT RECESSION</button>
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -536,6 +561,15 @@ export default function Dashboard() {
                                             ) : (
                                                 <div style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>Select an asset to view analysis.</div>
                                             )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {activeTab === 'settings' && (
+                                    <div>
+                                        <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Account Settings</h2>
+                                        <div style={{ maxWidth: '600px' }}>
+                                            <TeamPasswordChange />
                                         </div>
                                     </div>
                                 )}

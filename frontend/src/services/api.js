@@ -162,4 +162,89 @@ export const openAuction = async (ticker) => {
     return response.data;
 }
 
+// ============ NEW ENDPOINTS FOR RESEARCH TRACKING ============
+
+// --- CONSENT & ONBOARDING ---
+export const checkConsentStatus = async () => {
+    const response = await default_api.get('/consent/status');
+    return response.data;
+};
+
+export const acceptConsent = async (consentData) => {
+    const response = await default_api.post('/consent/accept', consentData);
+    return response.data;
+};
+
+export const submitTeamLeaderInfo = async (teamInfo) => {
+    const response = await default_api.post('/consent/team-leader', teamInfo);
+    return response.data;
+};
+
+
+// --- MULTI-LOT AUCTIONS ---
+export const getAuctionLots = async () => {
+    const response = await default_api.get('/auction/lots');
+    return response.data;
+};
+
+export const getLotBids = async (lotId) => {
+    const response = await default_api.get(`/auction/bids/${lotId}`);
+    return response.data;
+};
+
+export const placeLotBid = async (lotId, amount) => {
+    const response = await default_api.post('/auction/bid', { lot_id: lotId, amount });
+    return response.data;
+};
+
+// --- ADMIN PRICE NUDGE ---
+export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs) => {
+    const response = await default_api.post('/admin/price/nudge', {
+        ticker,
+        adjustment_pct: adjustmentPct,
+        adjustment_abs: adjustmentAbs
+    });
+    return response.data;
+};
+
+// --- ADMIN CREDENTIALS ---
+export const updateAdminCredentials = async (newUsername, newPassword) => {
+    const response = await default_api.post('/admin/credentials/update', {
+        new_username: newUsername,
+        new_password: newPassword
+    });
+    return response.data;
+};
+
+// --- DATA EXPORT ---
+export const exportActivityData = async () => {
+    const response = await default_api.get('/admin/export/activity', {
+        responseType: 'blob'
+    });
+    return response.data;
+};
+
+export const exportTeamData = async () => {
+    const response = await default_api.get('/admin/export/teams', {
+        responseType: 'blob'
+    });
+    return response.data;
+};
+
+export const getResearchSummary = async () => {
+    const response = await default_api.get('/admin/export/summary');
+    return response.data;
+};
+
+// --- ACTIVITY LOGGING ---
+export const logActivity = async (actionType, actionDetails, durationMs = null) => {
+    const response = await default_api.post('/activity/log', {
+        action_type: actionType,
+        action_details: actionDetails,
+        duration_ms: durationMs
+    });
+    return response.data;
+};
+
 export default default_api;
+

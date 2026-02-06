@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Gavel, TrendingUp, AlertCircle, Play, CheckCircle } from 'lucide-react';
-import { scanBids, placeBid, openAuction, resolveAuction, getMarketState } from '../services/api';
+import { Gavel, TrendingUp, AlertCircle, Play, CheckCircle, Package } from 'lucide-react';
+import { getAuctionLots, placeLotBid, openAuction, resolveAuction } from '../services/api';
 import { toast } from 'sonner';
 
 export default function AuctionHouse({ user, marketState, onUpdate }) {
-    const [bids, setBids] = useState([]);
-    const [bidAmount, setBidAmount] = useState(marketState?.active_auction_asset ? 0 : 0);
+    const [lots, setLots] = useState([]);
+    const [selectedLot, setSelectedLot] = useState(null);
+    const [bidAmount, setBidAmount] = useState('');
     const [loading, setLoading] = useState(false);
 
     const isActive = marketState?.phase === 'AUCTION';
@@ -15,34 +16,40 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
     useEffect(() => {
         let interval;
         if (isActive && currentTicker) {
-            const fetchBids = async () => {
+            const fetchLots = async () => {
                 try {
-                    const data = await scanBids();
-                    setBids(data);
-                    if (data.length > 0 && bidAmount === 0) {
-                        setBidAmount(data[0].amount + 50); // Suggest next bid
+                    const data = await getAuctionLots();
+                    setLots(data);
+                    if (data.length > 0 && !selectedLot) {
+                        setSelectedLot(data[0]);
                     }
                 } catch (e) {
-                    console.error("Bid scan failed", e);
+                    console.error("Failed to fetch lots", e);
                 }
             };
 
-            fetchBids();
-            interval = setInterval(fetchBids, 2000); // Poll every 2s
+            fetchLots();
+            interval = setInterval(fetchLots, 2000); // Poll every 2s
         }
         return () => clearInterval(interval);
     }, [isActive, currentTicker]);
 
     const handlePlaceBid = async () => {
+        if (!selectedLot) {
+            toast.error('Select a lot to bid on');
+            return;
+        }
+
         try {
             setLoading(true);
-            await placeBid(parseFloat(bidAmount));
-            toast.success("Bid Placed!");
+            await placeLotBid(selectedLot.id, parseFloat(bidAmount));
+            toast.success(`Bid placed on Lot ${selectedLot.lot_number}`);
+            setBidAmount('');
             // Force immediate refresh
-            const data = await scanBids();
-            setBids(data);
+            const data = await getAuctionLots();
+            setLots(data);
         } catch (err) {
-            toast.error("Bid Failed", { description: err.response?.data?.detail });
+            toast.error(err.response?.data?.detail || 'Bid failed');
         } finally {
             setLoading(false);
         }
@@ -54,10 +61,10 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
 
         return (
             <div className="fintech-card" style={{ marginBottom: '1rem', border: '1px solid #b91c1c', backgroundColor: '#fef2f2' }}>
-                <h3 style={{ color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <Gavel size={20} /> Auctioneer Console
+                <h3 style={{ color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                    <Gavel size={18} /> AUCTIONEER CONSOLE
                 </h3>
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                     {!currentTicker ? (
                         <>
                             {['GOLD', 'TECH', 'OIL', 'REAL', 'BOND'].map(ticker => (
@@ -66,12 +73,10 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                                     onClick={async () => {
                                         try {
                                             setOpeningAuction(true);
-                                            console.log('[Auction] Opening auction for', ticker);
                                             await openAuction(ticker);
                                             toast.success(`Auction opened for ${ticker}`);
-                                            await onUpdate(); // Refresh market state
+                                            await onUpdate();
                                         } catch (err) {
-                                            console.error('[Auction] Failed to open:', err);
                                             toast.error(`Failed to open ${ticker}`, {
                                                 description: err.response?.data?.detail || err.message
                                             });
@@ -80,10 +85,10 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                                         }
                                     }}
                                     className="btn btn-secondary"
-                                    style={{ fontSize: '0.8rem' }}
+                                    style={{ fontSize: '0.75rem' }}
                                     disabled={openingAuction}
                                 >
-                                    {openingAuction ? 'Opening...' : `Open ${ticker}`}
+                                    {openingAuction ? 'OPENING...' : `OPEN ${ticker}`}
                                 </button>
                             ))}
                         </>
@@ -92,12 +97,10 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                             onClick={async () => {
                                 try {
                                     setResolvingAuction(true);
-                                    console.log('[Auction] Resolving auction for', currentTicker);
                                     const res = await resolveAuction();
                                     toast.success(res.message || 'Auction resolved');
                                     await onUpdate();
                                 } catch (err) {
-                                    console.error('[Auction] Failed to resolve:', err);
                                     toast.error('Failed to resolve auction', {
                                         description: err.response?.data?.detail || err.message
                                     });
@@ -124,73 +127,163 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
             {user.role === 'admin' && <AdminControl />}
 
             {isActive ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-                    {/* Left: Asset on Block */}
-                    <div className="fintech-card" style={{ textAlign: 'center', paddingTop: '3rem', paddingBottom: '3rem', borderLeft: '5px solid #D1202F' }}>
-                        <div className="text-label" style={{ fontSize: '1rem' }}>ON THE BLOCK</div>
-                        <h1 style={{ fontSize: '4rem', margin: '1rem 0', color: '#D1202F' }}>{currentTicker || "WAITING..."}</h1>
-                        <div style={{ fontSize: '1.2rem', color: '#6B7280' }}>
-                            {currentTicker === 'TECH' ? 'Tech Growth ETF' : currentTicker === 'GOLD' ? 'Gold Reserves' : 'Asset Class'}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: '1.5rem' }}>
+                    {/* Left: Asset Info */}
+                    <div>
+                        <div className="fintech-card" style={{ textAlign: 'center', padding: '2rem', borderLeft: '5px solid #D1202F', marginBottom: '1rem' }}>
+                            <div className="text-label" style={{ fontSize: '0.8rem' }}>ON THE BLOCK</div>
+                            <h1 style={{ fontSize: '3rem', margin: '0.75rem 0', color: '#D1202F' }}>{currentTicker || "WAITING..."}</h1>
+                            <div style={{ fontSize: '0.9rem', color: '#666' }}>
+                                {currentTicker === 'TECH' ? 'Tech Growth ETF' :
+                                    currentTicker === 'GOLD' ? 'Gold Reserves' :
+                                        currentTicker === 'OIL' ? 'Oil Futures' :
+                                            currentTicker === 'REAL' ? 'Real Estate' :
+                                                currentTicker === 'BOND' ? 'Government Bonds' : 'Asset Class'}
+                            </div>
+                            <div className="pill pill-red" style={{ marginTop: '1rem', fontSize: '0.75rem' }}>LIVE AUCTION</div>
                         </div>
-                        <div className="pill pill-red" style={{ marginTop: '1rem', fontSize: '1rem' }}>LIVE AUCTION</div>
+
+                        {/* Lot Selection */}
+                        <div className="fintech-card">
+                            <div className="text-label" style={{ marginBottom: '0.75rem' }}>AVAILABLE LOTS</div>
+                            <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                {lots.map(lot => (
+                                    <button
+                                        key={lot.id}
+                                        onClick={() => {
+                                            setSelectedLot(lot);
+                                            setBidAmount(lot.highest_bid ? (lot.highest_bid + 50).toString() : lot.base_price.toString());
+                                        }}
+                                        className={selectedLot?.id === lot.id ? 'btn btn-primary' : 'btn btn-secondary'}
+                                        style={{
+                                            width: '100%',
+                                            justifyContent: 'space-between',
+                                            padding: '0.75rem 1rem',
+                                            textAlign: 'left'
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <Package size={16} />
+                                            <span>LOT {lot.lot_number}</span>
+                                        </div>
+                                        <span className="mono-num" style={{ fontSize: '0.85rem' }}>
+                                            {lot.quantity} units
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
                     </div>
 
-                    {/* Right: Bidding */}
+                    {/* Right: Bidding Interface */}
                     <div>
-                        <div className="fintech-card" style={{ marginBottom: '1rem' }}>
-                            <div className="flex-between">
-                                <div>
-                                    <div className="text-label">CURRENT HIGHEST BID</div>
-                                    <div className="mono-num" style={{ fontSize: '2.5rem', fontWeight: 700 }}>
-                                        ${bids.length > 0 ? bids[0].amount.toLocaleString() : "---"}
+                        {selectedLot ? (
+                            <>
+                                <div className="fintech-card" style={{ marginBottom: '1rem', background: '#f9f9f9' }}>
+                                    <div className="flex-between" style={{ marginBottom: '1rem' }}>
+                                        <h3 style={{ fontSize: '1rem', margin: 0 }}>LOT {selectedLot.lot_number}</h3>
+                                        <div className="pill" style={{ background: '#FEE2E2', color: '#B91C1C' }}>
+                                            {selectedLot.status}
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                                        <div>
+                                            <div className="text-label">Quantity</div>
+                                            <div className="mono-num" style={{ fontSize: '1.5rem', fontWeight: 700 }}>
+                                                {selectedLot.quantity}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <div className="text-label">Base Price</div>
+                                            <div className="mono-num" style={{ fontSize: '1.5rem', fontWeight: 700 }}>
+                                                ${selectedLot.base_price.toFixed(2)}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: '1rem' }}>
+                                        <div className="text-label">Current Highest Bid</div>
+                                        <div className="flex-between">
+                                            <div className="mono-num" style={{ fontSize: '2rem', fontWeight: 700, color: '#D1202F' }}>
+                                                ${selectedLot.highest_bid ? selectedLot.highest_bid.toLocaleString() : '---'}
+                                            </div>
+                                            {selectedLot.highest_bidder_username && (
+                                                <div style={{ textAlign: 'right' }}>
+                                                    <div className="text-label" style={{ marginBottom: '0.25rem' }}>Leader</div>
+                                                    <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                                                        {selectedLot.highest_bidder_username}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div className="text-label">LEADER</div>
-                                    <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>
-                                        {bids.length > 0 ? `User #${bids[0].user_id}` : "No Bids"}
+
+                                <div className="fintech-card">
+                                    <div className="text-label">PLACE YOUR BID</div>
+                                    <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                                        <input
+                                            type="number"
+                                            className="input-field mono-num"
+                                            style={{ fontSize: '1.5rem', fontWeight: 700, flex: 1 }}
+                                            value={bidAmount}
+                                            onChange={e => setBidAmount(e.target.value)}
+                                            placeholder={selectedLot.base_price.toString()}
+                                        />
+                                        <button
+                                            onClick={handlePlaceBid}
+                                            disabled={loading || !bidAmount}
+                                            className="btn btn-primary"
+                                            style={{ fontSize: '1.2rem', padding: '0 2rem' }}
+                                        >
+                                            {loading ? '...' : 'BID'}
+                                        </button>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
 
-                        <div className="fintech-card">
-                            <div className="text-label">PLACE YOUR BID</div>
-                            <div style={{ display: 'flex', gap: '1rem' }}>
-                                <input
-                                    type="number"
-                                    className="input-field mono-num"
-                                    style={{ fontSize: '1.5rem', fontWeight: 700 }}
-                                    value={bidAmount}
-                                    onChange={e => setBidAmount(e.target.value)}
-                                />
-                                <button
-                                    onClick={handlePlaceBid}
-                                    disabled={loading}
-                                    className="btn btn-primary"
-                                    style={{ fontSize: '1.2rem', padding: '0 2rem' }}
-                                >
-                                    BID
-                                </button>
-                            </div>
-                        </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+                                        <button
+                                            onClick={() => setBidAmount((selectedLot.highest_bid || selectedLot.base_price) + 50)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.75rem', padding: '0.5rem' }}
+                                        >
+                                            +$50
+                                        </button>
+                                        <button
+                                            onClick={() => setBidAmount((selectedLot.highest_bid || selectedLot.base_price) + 100)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.75rem', padding: '0.5rem' }}
+                                        >
+                                            +$100
+                                        </button>
+                                        <button
+                                            onClick={() => setBidAmount((selectedLot.highest_bid || selectedLot.base_price) + 500)}
+                                            className="btn btn-secondary"
+                                            style={{ fontSize: '0.75rem', padding: '0.5rem' }}
+                                        >
+                                            +$500
+                                        </button>
+                                    </div>
 
-                        <div style={{ marginTop: '1rem' }}>
-                            <h4 style={{ fontSize: '0.9rem', marginBottom: '0.5rem' }}>Recent Bids</h4>
-                            {bids.slice(0, 5).map((b, i) => (
-                                <div key={b.id} className="flex-between" style={{ padding: '0.5rem 0', borderBottom: '1px solid #eee', opacity: i === 0 ? 1 : 0.6 }}>
-                                    <span className="mono-num" style={{ fontWeight: 600 }}>${b.amount.toLocaleString()}</span>
-                                    <span style={{ fontSize: '0.8rem' }}>User #{b.user_id}</span>
+                                    <p style={{ fontSize: '0.75rem', color: '#666', marginTop: '0.75rem' }}>
+                                        Minimum bid: ${selectedLot.highest_bid ? (selectedLot.highest_bid + 1).toFixed(2) : selectedLot.base_price.toFixed(2)}
+                                    </p>
                                 </div>
-                            ))}
-                        </div>
+                            </>
+                        ) : (
+                            <div className="fintech-card" style={{ textAlign: 'center', padding: '3rem' }}>
+                                <Package size={40} color="#9CA3AF" style={{ marginBottom: '1rem' }} />
+                                <h3 style={{ fontSize: '1rem' }}>Select a Lot</h3>
+                                <p style={{ color: '#666', fontSize: '0.85rem' }}>Choose a lot from the left to start bidding</p>
+                            </div>
+                        )}
                     </div>
                 </div>
             ) : (
                 <div className="fintech-card" style={{ textAlign: 'center', padding: '3rem' }}>
                     <AlertCircle size={40} color="#9CA3AF" style={{ marginBottom: '1rem' }} />
-                    <h3>Auction House Closed</h3>
-                    <p style={{ color: '#6B7280' }}>Wait for the Administrator to open the next lot.</p>
+                    <h3 style={{ fontSize: '1rem' }}>Auction House Closed</h3>
+                    <p style={{ color: '#666', fontSize: '0.85rem' }}>Wait for the administrator to open the next auction</p>
                 </div>
             )}
         </div>

@@ -7,8 +7,11 @@ from .database import create_db_and_tables, get_session, engine
 from .engine import MarketEngine
 from fastapi.security import OAuth2PasswordRequestForm
 from .auth import create_access_token, get_current_admin, get_current_user, get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES
-from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory
-from pydantic import BaseModel
+from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot
+from .activity_logger import ActivityLogger
+from .admin_tools import AdminTools
+from pydantic import BaseModel, EmailStr
+from fastapi.responses import Response
 
 # --- Pydantic Schemas for Requests ---
 class BidCreate(BaseModel):
@@ -22,6 +25,25 @@ class LoanOfferCreate(BaseModel):
 class ShockTrigger(BaseModel):
     type: str # INFLATION, RECESSION, NONE
     action: str # HINT, CRASH
+
+class ConsentAccept(BaseModel):
+    leader_name: str
+    email: EmailStr
+    age: int
+    team_size: int = 1
+
+class BidLotCreate(BaseModel):
+    lot_id: int
+    amount: float
+
+class PriceNudge(BaseModel):
+    ticker: str
+    adjustment_pct: Optional[float] = None
+    adjustment_abs: Optional[float] = None
+
+class AdminCredUpdate(BaseModel):
+    new_username: Optional[str] = None
+    new_password: Optional[str] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -59,8 +81,19 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
+    # Update last login time
+    from datetime import datetime
+    user.last_login = datetime.utcnow()
+    session.add(user)
+    session.commit()
+    
     access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role,
+        "has_consented": user.has_consented
+    }
 
 
 
@@ -143,10 +176,14 @@ def toggle_user_freeze(user_id: int, user: User = Depends(get_current_admin), se
 # --- ACTIONS ---
 
 @app.post("/auction/bid")
-def place_bid(bid: BidCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+def place_bid(bid: BidLotCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Place bid on a specific auction lot"""
     sim = MarketEngine(session)
+    logger = ActivityLogger(session)
+    
     try:
-        sim.place_bid(user, bid.amount)
+        sim.place_bid(user, bid.lot_id, bid.amount)
+        logger.log_bid(user.id, sim.get_state().active_auction_asset, bid.lot_id, bid.amount, 0)
         return {"message": "Bid placed successfully"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -348,4 +385,394 @@ def reset_asset_prices(user: User = Depends(get_current_admin), session: Session
     session.commit()
     return {"message": f"Reset {reset_count} asset(s) to base prices", "reset_count": reset_count}
 
+
+# ============ NEW ENDPOINTS FOR RESEARCH TRACKING ============
+
+# --- CONSENT & ONBOARDING ---
+
+@app.get("/consent/status")
+def check_consent_status(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Check if user has consented to research participation"""
+    consent = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
+    team_info = session.exec(select(TeamLeaderInfo).where(TeamLeaderInfo.user_id == user.id)).first()
+    
+    return {
+        "has_consented": user.has_consented,
+        "consent_record": consent,
+        "team_info": team_info
+    }
+
+@app.post("/consent/accept")
+def accept_consent(
+    consent_data: ConsentAccept,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Accept research consent and provide team leader information"""
+    # Check if already consented
+    existing = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Already consented")
+    
+    # Create consent record
+    consent = ConsentRecord(
+        user_id=user.id,
+        consent_text_version="v1.0"
+    )
+    session.add(consent)
+    
+    # Create team leader info
+    team_info = TeamLeaderInfo(
+        user_id=user.id,
+        leader_name=consent_data.leader_name,
+        email=consent_data.email,
+        age=consent_data.age,
+        team_size=consent_data.team_size
+    )
+    session.add(team_info)
+    
+    # Update user
+    user.has_consented = True
+    session.add(user)
+    
+    session.commit()
+    
+    # Log the consent
+    logger = ActivityLogger(session)
+    logger.log_action(
+        user_id=user.id,
+        action_type="CONSENT_ACCEPTED",
+        action_details={
+            "leader_name": consent_data.leader_name,
+            "team_size": consent_data.team_size
+        }
+    )
+    
+    return {"message": "Consent recorded successfully"}
+
+
+# --- MULTI-LOT AUCTION ENDPOINTS ---
+
+@app.get("/auction/lots")
+def get_auction_lots(session: Session = Depends(get_session)):
+    """Get all lots for the active auction"""
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.active_auction_asset:
+        return []
+    
+    lots = session.exec(
+        select(AuctionLot).where(AuctionLot.asset_ticker == state.active_auction_asset)
+    ).all()
+    
+    # Enrich with current highest bid for each lot
+    result = []
+    for lot in lots:
+        highest_bid = session.exec(
+            select(AuctionBid).where(AuctionBid.lot_id == lot.id)
+            .order_by(AuctionBid.amount.desc())
+        ).first()
+        
+        # Get bidder username if there is a highest bid
+        highest_bidder_username = None
+        if highest_bid:
+            bidder = session.get(User, highest_bid.user_id)
+            if bidder:
+                highest_bidder_username = bidder.username
+        
+        result.append({
+            **lot.dict(),
+            "highest_bid": highest_bid.amount if highest_bid else None,
+            "highest_bidder_id": highest_bid.user_id if highest_bid else None,
+            "highest_bidder_username": highest_bidder_username
+        })
+    
+    return result
+
+@app.get("/auction/bids/{lot_id}")
+def get_lot_bids(lot_id: int, session: Session = Depends(get_session)):
+    """Get all bids for a specific lot"""
+    bids = session.exec(
+        select(AuctionBid).where(AuctionBid.lot_id == lot_id)
+        .order_by(AuctionBid.amount.desc())
+    ).all()
+    
+    # Enrich with usernames
+    result = []
+    for bid in bids:
+        user = session.get(User, bid.user_id)
+        result.append({
+            **bid.dict(),
+            "username": user.username if user else "Unknown"
+        })
+    
+    return result
+
+
+# --- ADMIN PRICE NUDGE ---
+
+@app.post("/admin/price/nudge")
+def nudge_asset_price(
+    nudge: PriceNudge,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Adjust asset price by percentage or absolute amount"""
+    admin_tools = AdminTools(session)
+    logger = ActivityLogger(session)
+    
+    try:
+        result = admin_tools.nudge_price(
+            ticker=nudge.ticker,
+            adjustment_pct=nudge.adjustment_pct,
+            adjustment_abs=nudge.adjustment_abs,
+            admin_username=user.username
+        )
+        
+        # Log the action
+        logger.log_action(
+            user_id=user.id,
+            action_type="ADMIN_PRICE_NUDGE",
+            action_details=result
+        )
+        
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- ADMIN CREDENTIALS ---
+
+@app.post("/admin/credentials/update")
+def update_admin_credentials(
+    cred_update: AdminCredUpdate,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Update admin username and/or password"""
+    admin_tools = AdminTools(session)
+    
+    try:
+        result = admin_tools.change_admin_credentials(
+            new_username=cred_update.new_username,
+            new_password=cred_update.new_password,
+            current_admin_username=user.username
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- DATA EXPORT ---
+
+@app.get("/admin/export/activity")
+def export_activity_data(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Export all activity logs as CSV"""
+    admin_tools = AdminTools(session)
+    csv_data = admin_tools.export_activity_data_csv()
+    
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=activity_logs.csv"}
+    )
+
+@app.get("/admin/export/teams")
+def export_team_data(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Export team leader information as CSV"""
+    admin_tools = AdminTools(session)
+    csv_data = admin_tools.export_team_info_csv()
+    
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=team_info.csv"}
+    )
+
+@app.get("/admin/export/summary")
+def get_research_summary(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Get summary statistics for research data"""
+    admin_tools = AdminTools(session)
+    return admin_tools.get_research_summary()
+
+
+# --- ACTIVITY LOGGING (for frontend to track views) ---
+
+@app.post("/activity/log")
+def log_activity(
+    action_type: str,
+    action_details: dict,
+    duration_ms: Optional[int] = None,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Log user activity from frontend"""
+    logger = ActivityLogger(session)
+    logger.log_action(
+        user_id=user.id,
+        action_type=action_type,
+        action_details=action_details,
+        duration_ms=duration_ms
+    )
+    return {"message": "Activity logged"}
+
+
+# --- TEAM CREDENTIAL MANAGEMENT ---
+
+@app.post("/users/change-password")
+def change_team_password(
+    current_password: str,
+    new_password: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Allow team users to change their own password"""
+    # Verify current password
+    if not verify_password(current_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    # Validate new password
+    if len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    
+    # Update password
+    user.hashed_password = get_password_hash(new_password)
+    session.add(user)
+    session.commit()
+    
+    return {"message": "Password changed successfully"}
+
+
+@app.get("/admin/login-status")
+def get_login_status(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Get login status of all team users"""
+    from datetime import datetime, timedelta
+    
+    teams = session.exec(select(User).where(User.role == Role.TEAM)).all()
+    
+    result = []
+    for team in teams:
+        # Consider online if logged in within last 5 minutes
+        is_online = False
+        if team.last_login:
+            time_since_login = datetime.utcnow() - team.last_login
+            is_online = time_since_login < timedelta(minutes=5)
+        
+        result.append({
+            "id": team.id,
+            "username": team.username,
+            "is_online": is_online,
+            "last_login": team.last_login.isoformat() if team.last_login else None,
+            "is_frozen": team.is_frozen,
+            "has_consented": team.has_consented
+        })
+    
+    return result
+
+
+@app.put("/admin/teams/{team_id}/credentials")
+def admin_change_team_credentials(
+    team_id: int,
+    new_username: Optional[str] = None,
+    new_password: Optional[str] = None,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Admin can change a team's username and/or password"""
+    team = session.get(User, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    if team.role != Role.TEAM:
+        raise HTTPException(status_code=400, detail="Can only modify team accounts")
+    
+    # Update username if provided
+    if new_username:
+        # Check if username already exists
+        existing = session.exec(select(User).where(User.username == new_username)).first()
+        if existing and existing.id != team_id:
+            raise HTTPException(status_code=400, detail="Username already exists")
+        team.username = new_username
+    
+    # Update password if provided
+    if new_password:
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        team.hashed_password = get_password_hash(new_password)
+    
+    session.add(team)
+    session.commit()
+    session.refresh(team)
+    
+    return {"message": "Team credentials updated successfully", "username": team.username}
+
+
+@app.delete("/admin/teams/{team_id}")
+def admin_delete_team(
+    team_id: int,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Admin can delete a team account"""
+    team = session.get(User, team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    if team.role != Role.TEAM:
+        raise HTTPException(status_code=400, detail="Can only delete team accounts")
+    
+    # Delete related data
+    # Delete holdings
+    holdings = session.exec(select(Holding).where(Holding.user_id == team_id)).all()
+    for holding in holdings:
+        session.delete(holding)
+    
+    # Delete orders
+    orders = session.exec(select(Order).where(Order.user_id == team_id)).all()
+    for order in orders:
+        session.delete(order)
+    
+    # Delete loans (both as lender and borrower)
+    loans = session.exec(select(TeamLoan).where(
+        (TeamLoan.lender_id == team_id) | (TeamLoan.borrower_id == team_id)
+    )).all()
+    for loan in loans:
+        session.delete(loan)
+    
+    # Delete auction bids
+    bids = session.exec(select(AuctionBid).where(AuctionBid.user_id == team_id)).all()
+    for bid in bids:
+        session.delete(bid)
+    
+    # Delete activity logs
+    logs = session.exec(select(ActivityLog).where(ActivityLog.user_id == team_id)).all()
+    for log in logs:
+        session.delete(log)
+    
+    # Delete consent record
+    consent = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == team_id)).first()
+    if consent:
+        session.delete(consent)
+    
+    # Delete team leader info
+    team_info = session.exec(select(TeamLeaderInfo).where(TeamLeaderInfo.user_id == team_id)).first()
+    if team_info:
+        session.delete(team_info)
+    
+    # Finally delete the user
+    session.delete(team)
+    session.commit()
+    
+    return {"message": f"Team '{team.username}' deleted successfully"}
 
