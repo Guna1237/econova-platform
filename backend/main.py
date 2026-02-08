@@ -1098,3 +1098,48 @@ def admin_delete_team(
     
     return {"message": f"Team '{team.username}' deleted successfully"}
 
+@app.post("/admin/users/{user_id}/freeze")
+def freeze_user(
+    user_id: int,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Toggle freeze status for a user"""
+    target = session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    target.is_frozen = not target.is_frozen
+    session.add(target)
+    session.commit()
+    
+    status = "FROZEN" if target.is_frozen else "ACTIVE"
+    return {"message": f"User {target.username} remains now {status}", "is_frozen": target.is_frozen}
+
+@app.post("/admin/users/{user_id}/liquidate")
+def liquidate_user(
+    user_id: int,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Liquidate all assets of a team to cash at current market prices"""
+    target = session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    holdings = session.exec(select(Holding).where(Holding.user_id == user_id)).all()
+    total_value = 0.0
+    
+    for holding in holdings:
+        asset = session.get(Asset, holding.asset_id)
+        if asset:
+            market_value = holding.quantity * asset.current_price
+            total_value += market_value
+            # "Sell" to market (system absorbs)
+            session.delete(holding)
+            
+    target.cash += total_value
+    session.add(target)
+    session.commit()
+    
+    return {"message": f"Liquidated all assets for ${total_value:,.2f}", "cash_added": total_value}

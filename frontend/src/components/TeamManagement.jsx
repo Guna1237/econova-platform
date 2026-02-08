@@ -59,11 +59,25 @@ export default function TeamManagement({ teams, onUpdate }) {
 
     const handleFreeze = async (teamId) => {
         try {
-            await api.post(`/admin/freeze/${teamId}`);
+            // FIXED: Updated to match backend endpoint /admin/users/{id}/freeze
+            await api.post(`/admin/users/${teamId}/freeze`);
             toast.info('Team status updated');
             onUpdate();
         } catch (error) {
             toast.error('Failed to toggle freeze');
+        }
+    };
+
+    const handleLiquidate = async (team) => {
+        if (!confirm(`LIQUIDATION WARNING:\n\nAre you sure you want to LIQUIDATE all assets for team "${team.username}"?\n\nThis will sell ALL their holdings at current market prices and convert them to CASH. This action cannot be undone.`)) {
+            return;
+        }
+        try {
+            const res = await api.post(`/admin/users/${team.id}/liquidate`);
+            toast.success('Liquidation Successful', { description: res.data.message });
+            onUpdate();
+        } catch (error) {
+            toast.error('Failed to liquidate assets');
         }
     };
 
@@ -151,6 +165,20 @@ export default function TeamManagement({ teams, onUpdate }) {
                                         >
                                             {team.is_frozen ? 'FROZEN' : 'ACTIVE'}
                                         </span>
+                                        <button
+                                            onClick={() => handleLiquidate(team)}
+                                            className="btn"
+                                            style={{
+                                                fontSize: '0.65rem',
+                                                padding: '0.3rem 0.5rem',
+                                                background: '#000',
+                                                color: '#FFF',
+                                                border: '1px solid #000'
+                                            }}
+                                            title="Liquidate Assets"
+                                        >
+                                            LIQUIDATE
+                                        </button>
                                         <button
                                             onClick={() => handleFreeze(team.id)}
                                             className="btn btn-secondary"

@@ -95,6 +95,11 @@ export const toggleFreezeUser = async (userId) => {
     return response.data;
 };
 
+export const liquidateTeamUser = async (userId) => {
+    const response = await default_api.post(`/admin/users/${userId}/liquidate`);
+    return response.data;
+};
+
 export const placeOrder = async (orderData) => {
     const response = await default_api.post('/orders', orderData);
     return response.data;
