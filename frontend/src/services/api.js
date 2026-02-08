@@ -32,6 +32,8 @@ export const login = async (username, password) => {
     });
     if (response.data.access_token) {
         localStorage.setItem('token', response.data.access_token);
+    } else {
+        throw new Error("No access token received from server");
     }
     return response.data;
 };
@@ -243,6 +245,70 @@ export const logActivity = async (actionType, actionDetails, durationMs = null) 
         action_details: actionDetails,
         duration_ms: durationMs
     });
+    return response.data;
+};
+
+// --- PRIVATE TRADING ---
+
+export const createPrivateOffer = async (offerData) => {
+    const response = await default_api.post('/offers/create', offerData);
+    return response.data;
+};
+
+export const getMyOffers = async () => {
+    const response = await default_api.get('/offers/my');
+    return response.data;
+};
+
+export const acceptOffer = async (offerId) => {
+    const response = await default_api.post(`/offers/${offerId}/accept`);
+    return response.data;
+};
+
+export const rejectOffer = async (offerId) => {
+    const response = await default_api.post(`/offers/${offerId}/reject`);
+    return response.data;
+};
+
+export const getTransactions = async () => {
+    const response = await default_api.get('/transactions');
+    return response.data;
+};
+
+export const openMarketplace = async () => {
+    const response = await default_api.post('/admin/marketplace/open');
+    return response.data;
+};
+
+export const closeMarketplace = async () => {
+    const response = await default_api.post('/admin/marketplace/close');
+    return response.data;
+};
+
+// --- NEWS SYSTEM ---
+
+export const getNews = async () => {
+    const response = await default_api.get('/news');
+    return response.data;
+};
+
+export const getAllNewsAdmin = async () => {
+    const response = await default_api.get('/admin/news/all');
+    return response.data;
+};
+
+export const createNews = async (newsData) => {
+    const response = await default_api.post('/admin/news/create', newsData);
+    return response.data;
+};
+
+export const updateNews = async (id, newsData) => {
+    const response = await default_api.put(`/admin/news/${id}`, newsData);
+    return response.data;
+};
+
+export const deleteNews = async (id) => {
+    const response = await default_api.delete(`/admin/news/${id}`);
     return response.data;
 };
 

@@ -29,6 +29,13 @@ class LotStatus(str, Enum):
     SOLD = "sold"
     CANCELLED = "cancelled"
 
+class OfferStatus(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
+
 class Asset(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
@@ -104,9 +111,13 @@ class MarketState(SQLModel, table=True):
     current_year: int = Field(default=2024)
     phase: str = Field(default="PRE_GAME") # PRE_GAME, AUCTION, TRADING, FINISHED
     
+    # Marketplace Control
+    marketplace_open: bool = Field(default=False)
+    
     # Shock System
     shock_stage: str = Field(default="NORMAL") # NORMAL, WARNING, CRASH, RECOVERY
     shock_type: str = Field(default="NONE") # INFLATION, RECESSION
+    last_shock_year: Optional[int] = None # Track when shock happened for recovery
     
     active_auction_asset: Optional[str] = None
     news_feed: str = Field(default="Welcome to Econova.")
@@ -167,3 +178,50 @@ class AdminCredentials(SQLModel, table=True):
     hashed_password: str
     last_changed: datetime = Field(default_factory=datetime.utcnow)
     changed_by: Optional[str] = None  # Username of who made the change
+
+class PrivateOffer(SQLModel, table=True):
+    """Private trading offers between teams"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    from_user_id: int = Field(foreign_key="user.id", index=True)
+    to_user_id: Optional[int] = Field(default=None, foreign_key="user.id", index=True)  # None = open offer
+    asset_ticker: str = Field(index=True)
+    offer_type: OrderType  # BUY or SELL
+    quantity: int
+    price_per_unit: float
+    total_value: float
+    status: OfferStatus = Field(default=OfferStatus.PENDING)
+    message: Optional[str] = None  # Optional message from offerer
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    expires_at: Optional[datetime] = None
+    responded_at: Optional[datetime] = None
+
+class Transaction(SQLModel, table=True):
+    """Record of completed trades (public visibility)"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    buyer_id: int = Field(foreign_key="user.id", index=True)
+    seller_id: int = Field(foreign_key="user.id", index=True)
+    asset_ticker: str = Field(index=True)
+    quantity: int
+    price_per_unit: float
+    total_value: float
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+class NewsItem(SQLModel, table=True):
+    """News articles for the platform"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str
+    content: str
+    published_at: datetime = Field(default_factory=datetime.utcnow)
+    is_published: bool = Field(default=False)
+    image_url: Optional[str] = None
+    source: str = Field(default="Global News Network")
+
+class ActiveEvent(SQLModel, table=True):
+    """Tracks ongoing micro-events affecting specific assets"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    asset_ticker: str
+    event_type: str = "MICRO" # MICRO, SECTOR, etc.
+    description: str
+    annual_impact: float # e.g., 0.05 for +5% growth boost
+    start_year: int
+    duration: int
+    remaining_years: int

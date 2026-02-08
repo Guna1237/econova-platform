@@ -149,91 +149,47 @@ export default function Login() {
                     <img src={clubLogo} style={{ height: '80px' }} alt="Finance & Economics Club" />
                 </div>
 
-                <div style={{ width: '100%', maxWidth: '380px' }}>
+                <div className="login-container">
                     <div style={{ marginBottom: '2.5rem', textAlign: 'center' }}>
-                        <h2 style={{ fontSize: '2rem', fontWeight: 800, color: '#000', marginBottom: '0.5rem', letterSpacing: '-0.03em' }}>
-                            Member Login
+                        <h2 className="login-header">
+                            ACCESS TERMINAL
                         </h2>
-                        <p style={{ color: '#666', fontSize: '0.95rem' }}>Authenticate to access the terminal.</p>
+                        <p className="login-subtext">Authorized personnel only. Secure connection.</p>
                     </div>
 
-                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                        <div>
-                            <div style={{ position: 'relative' }}>
-                                <input
-                                    type="text"
-                                    value={username}
-                                    onChange={e => setUsername(e.target.value)}
-                                    placeholder="Access ID"
-                                    style={{
-                                        width: '100%',
-                                        padding: '1.2rem 1rem 1.2rem 3rem',
-                                        border: '1px solid #e5e7eb',
-                                        background: '#f9fafb',
-                                        borderRadius: '0',
-                                        fontSize: '1rem',
-                                        fontWeight: 600,
-                                        color: '#000',
-                                        outline: 'none',
-                                        transition: 'all 0.2s'
-                                    }}
-                                    className="login-input"
-                                    onFocus={(e) => { e.target.style.borderColor = '#000'; e.target.style.background = '#FFF'; }}
-                                    onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.background = '#f9fafb'; }}
-                                />
-                                <User size={20} color="#9ca3af" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)' }} />
-                            </div>
+                    <form onSubmit={handleSubmit}>
+                        <div className="login-input-group">
+                            <label className="login-label">
+                                USERNAME ID
+                            </label>
+                            <input
+                                type="text"
+                                value={username}
+                                onChange={e => setUsername(e.target.value)}
+                                placeholder="Enter your credentials"
+                                className="login-input"
+                            />
+                            <User size={18} className="login-icon" />
                         </div>
 
-                        <div>
-                            <div style={{ position: 'relative' }}>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={e => setPassword(e.target.value)}
-                                    placeholder="Passkey"
-                                    style={{
-                                        width: '100%',
-                                        padding: '1.2rem 1rem 1.2rem 3rem',
-                                        border: '1px solid #e5e7eb',
-                                        background: '#f9fafb',
-                                        borderRadius: '0',
-                                        fontSize: '1rem',
-                                        fontWeight: 600,
-                                        color: '#000',
-                                        outline: 'none',
-                                        transition: 'all 0.2s'
-                                    }}
-                                    className="login-input"
-                                    onFocus={(e) => { e.target.style.borderColor = '#000'; e.target.style.background = '#FFF'; }}
-                                    onBlur={(e) => { e.target.style.borderColor = '#e5e7eb'; e.target.style.background = '#f9fafb'; }}
-                                />
-                                <Lock size={20} color="#9ca3af" style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)' }} />
-                            </div>
+                        <div className="login-input-group">
+                            <label className="login-label">
+                                PASSWORD
+                            </label>
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                placeholder="Enter your security key"
+                                className="login-input"
+                            />
+                            <Lock size={18} className="login-icon" />
                         </div>
 
                         <button
                             type="submit"
                             disabled={loading}
-                            style={{
-                                background: '#000',
-                                color: '#FFF',
-                                border: 'none',
-                                padding: '1.2rem',
-                                fontSize: '0.9rem',
-                                fontWeight: 700,
-                                letterSpacing: '0.05em',
-                                cursor: 'pointer',
-                                display: 'flex',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                marginTop: '1rem',
-                                textTransform: 'uppercase',
-                                transition: 'all 0.2s'
-                            }}
-                            onMouseOver={(e) => !loading && (e.target.style.background = '#D1202F')}
-                            onMouseOut={(e) => !loading && (e.target.style.background = '#000')}
+                            className="btn-login"
                         >
                             {loading ? <Loader2 className="animate-spin" /> : <>Access Terminal <ArrowRight size={16} /></>}
                         </button>

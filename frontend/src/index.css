@@ -202,3 +202,110 @@ td {
   border-radius: 0 !important;
   border: 1px solid #000 !important;
 }
+
+/* Login Page Specifics */
+.login-container {
+  max-width: 400px;
+  width: 100%;
+}
+
+.login-header {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #111;
+  text-transform: uppercase;
+  letter-spacing: -0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.login-subtext {
+  color: #666;
+  font-size: 0.95rem;
+  margin-bottom: 2.5rem;
+}
+
+.login-input-group {
+  margin-bottom: 1.5rem;
+  position: relative;
+}
+
+.login-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #444;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.5rem;
+}
+
+.login-input {
+  width: 100%;
+  padding: 1rem 1rem 1rem 3rem;
+  border: 1px solid #E5E7EB;
+  background: #FFFFFF;
+  font-family: var(--font-body);
+  /* Changed from mono for more natural feel */
+  font-size: 1rem;
+  color: #111;
+  outline: none;
+  transition: all 0.2s ease;
+  border-radius: 4px;
+  /* Slight radius for "natural" feel, or keep 0 for strict */
+}
+
+.login-input:focus {
+  border-color: #111;
+  /* Black focus for pro feel, not red */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.login-input::placeholder {
+  color: #999;
+  font-weight: 400;
+}
+
+.login-icon {
+  position: absolute;
+  left: 1rem;
+  top: 2.3rem;
+  /* Adjusted for label height */
+  color: #9CA3AF;
+  transition: color 0.2s;
+}
+
+.login-input:focus+.login-icon {
+  color: #111;
+}
+
+.btn-login {
+  background: #000;
+  color: #FFF;
+  border: none;
+  padding: 1rem;
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  text-transform: uppercase;
+  transition: all 0.2s;
+  border-radius: 4px;
+}
+
+.btn-login:hover:not(:disabled) {
+  background: #222;
+  /* Darker grey instead of red for pro feel */
+  transform: translateY(-1px);
+}
+
+.btn-login:disabled {
+  background: #888;
+  cursor: not-allowed;
+}

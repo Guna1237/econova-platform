@@ -2,7 +2,7 @@ import math
 import random
 from datetime import datetime
 from sqlmodel import Session, select, func
-from .models import Asset, MarketState, Order, OrderStatus, OrderType, User, Holding, TeamLoan, LoanStatus, AuctionBid, PriceHistory, Role, AuctionLot, LotStatus
+from .models import Asset, MarketState, Order, OrderStatus, OrderType, User, Holding, TeamLoan, LoanStatus, AuctionBid, PriceHistory, Role, AuctionLot, LotStatus, ActiveEvent, NewsItem
 
 class NewsCaster:
     TEMPLATES = {
@@ -51,6 +51,34 @@ class NewsCaster:
         candidates = NewsCaster.TEMPLATES.get(key, NewsCaster.TEMPLATES["NORMAL"])
         return random.choice(candidates)
 
+    MICRO_TEMPLATES = {
+        "GOLD": [
+            ("New major gold vein discovered in South Africa.", -0.05, 3), # Supply up, price down
+            ("Central Bank announces gold buying program.", 0.08, 2), # Demand up
+            ("Mining strike halts global production.", 0.12, 1), # Supply down
+        ],
+        "TECH": [
+            ("Breakthrough in quantum computing efficiency announced.", 0.15, 3), # Hype
+            ("Regulatory scrutiny on big tech monopolies increases.", -0.10, 2), # Fear
+            ("Supply chain shortage affects chip manufacturing.", -0.08, 1),
+        ],
+        "OIL": [
+            ("OPEC announces surprise production cut.", 0.20, 1), # Shock
+            ("New electric vehicle subsidy reduces oil demand forecasts.", -0.05, 4), # Trend
+            ("Geopolitical tension threatens major pipeline.", 0.12, 1),
+        ],
+        "REAL": [
+            ("Housing boom driven by low interest rates.", 0.08, 3),
+            ("New zoning laws restrict commercially viable land.", 0.05, 5),
+            ("Construction material costs skyrocket.", -0.06, 2),
+        ],
+        "BOND": [
+            ("Credit rating agency upgrades sovereign debt outlook.", 0.03, 3),
+            ("Inflation fears drive bond sell-off.", -0.04, 1),
+             ("Flight to safety increases demand for bonds.", 0.05, 1),
+        ]
+    }
+
 class MarketEngine:
     def __init__(self, session: Session):
         self.session = session
@@ -85,6 +113,49 @@ class MarketEngine:
         
         next_year = state.current_year + 1
         
+        # --- MICRO EVENTS GENERATION ---
+        # 10% chance per asset to trigger a new event if not in a crash
+        if state.shock_stage == 'NONE' or state.shock_stage == 'RECOVERY':
+            assets = self.session.exec(select(Asset)).all()
+            for asset in assets:
+                 # Check if already has an event
+                existing = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
+                if len(existing) >= 1: continue # Max 1 event at a time per asset
+
+                if random.random() < 0.15: # 15% chance
+                    templates = NewsCaster.MICRO_TEMPLATES.get(asset.ticker, [])
+                    if templates:
+                        desc, impact, duration = random.choice(templates)
+                        # Add some randomness to impact
+                        final_impact = impact * (0.8 + random.random() * 0.4) 
+                        
+                        event = ActiveEvent(
+                            asset_ticker=asset.ticker,
+                            description=desc,
+                            annual_impact=final_impact,
+                            start_year=next_year,
+                            duration=duration,
+                            remaining_years=duration
+                        )
+                        self.session.add(event)
+                        
+                        # Post News
+                        news = NewsItem(
+                            title=f"Market Update: {asset.name}",
+                            content=f"{desc} Analysts project an annual impact of {final_impact*100:.1f}% on {asset.ticker}.",
+                            is_published=True,
+                            source="Bloomberg Terminal",
+                            published_at=datetime.utcnow()
+                        )
+                        self.session.add(news)
+
+        # Check for recovery timing (3-4 years after shock)
+        if state.shock_stage == 'CRASH' and state.last_shock_year:
+            years_since_shock = next_year - state.last_shock_year
+            if years_since_shock >= 3: # Trigger recovery after 3 years
+                state.shock_stage = 'RECOVERY'
+                state.news_feed = NewsCaster.get_headline(state.shock_type, 'RECOVERY')
+
         # 1. Update Asset Prices
         assets = self.session.exec(select(Asset)).all()
         for asset in assets:
@@ -117,33 +188,45 @@ class MarketEngine:
                 else:
                     shock_factor = -0.10 * abs(beta)
             elif state.shock_stage == 'RECOVERY':
-                shock_factor = 0.12  # Increased recovery boost
-            
-            # ENHANCED Mean Reversion - Tiered Recovery
+                # Strong recovery boost
+                shock_factor = 0.15 + (random.random() * 0.10) # 15-25% boost
+
+            # ENHANCED Mean Reversion - Pull towards base price
+            # Calculate deviation ratio (e.g., 0.5 means price is 50% of base)
             price_ratio = asset.current_price / asset.base_price
             
-            # Strong recovery for crashed assets
-            if price_ratio < 0.2:  # Below 20% of base
-                shock_factor += 0.20  # Very strong recovery
-            elif price_ratio < 0.4:  # Below 40% of base
-                shock_factor += 0.12  # Strong recovery
-            elif price_ratio < 0.6:  # Below 60% of base
-                shock_factor += 0.06  # Moderate recovery
+            # k is the mean reversion speed
+            k_reversion = 0.0
             
-            # Upper bounds for defensive assets (prevent infinite growth)
-            if price_ratio > 2.0:  # Above 200% of base
-                shock_factor -= 0.10  # Strong penalty
-            elif price_ratio > 1.5:  # Above 150% of base
-                shock_factor -= 0.05  # Moderate penalty
+            if price_ratio < 0.5: # Extremely undervalued
+                k_reversion = 0.15 # Reduced from 0.20
+            elif price_ratio < 0.8: # Undervalued
+                k_reversion = 0.08 # Reduced from 0.10
+            elif price_ratio > 2.0: # Extremely overvalued
+                k_reversion = -0.10 # Reduced from -0.15
+            elif price_ratio > 1.5: # Overvalued
+                k_reversion = -0.05 # Reduced from -0.08
+                
+            # Micro Event Impact
+            micro_impact = 0.0
+            active_events = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
+            for event in active_events:
+                micro_impact += event.annual_impact
+                event.remaining_years -= 1
+                if event.remaining_years <= 0:
+                    self.session.delete(event)
+                else:
+                    self.session.add(event)
+
+            # Calculation
+            # Increased noise factor from 0.15 to 0.3 for more "real life" volatility
+            noise = random.gauss(0, asset.volatility * 0.3)
             
-            # Reduced noise impact for stability
-            noise = random.gauss(0, asset.volatility * 0.2)  # Further reduced
-            
-            # Calculate growth with base CAGR always applying
-            growth = asset.base_cagr + shock_factor + noise
+            # Calculate total growth
+            growth = asset.base_cagr + shock_factor + k_reversion + micro_impact + noise
             
             # Cap single-year changes for stability
-            growth = max(min(growth, 0.40), -0.40)  # Max ±40% per year
+            growth = max(min(growth, 0.50), -0.40)  # Max +50% / -40% per year
             
             # Calculate new price
             new_price = asset.current_price * (1 + growth)
@@ -187,6 +270,11 @@ class MarketEngine:
         state = self.get_state()
         state.shock_type = type_
         state.shock_stage = "WARNING" if action == "HINT" else "CRASH"
+        
+        # Record shock year for recovery timing
+        if state.shock_stage == 'CRASH':
+            state.last_shock_year = state.current_year
+            
         state.news_feed = NewsCaster.get_headline(type_, state.shock_stage)
         self.session.add(state)
         self.session.commit()
@@ -222,7 +310,7 @@ class MarketEngine:
                 lot_number=lot_num,
                 quantity=quantity,
                 base_price=asset.base_price * price_mult,
-                status=LotStatus.ACTIVE
+                status=LotStatus.ACTIVE if lot_num == 1 else LotStatus.PENDING
             )
             self.session.add(lot)
         
@@ -233,33 +321,32 @@ class MarketEngine:
         state = self.get_state()
         state.phase = "AUCTION"
         state.active_auction_asset = ticker
-        state.news_feed = f"🚨 AUCTION OPEN: {ticker} - Multiple lots available!"
-        
-        # Create lots for this auction
-        self.create_auction_lots(ticker)
-        
-        # Clear old bids
-        old_bids = self.session.exec(select(AuctionBid).where(AuctionBid.asset_ticker == ticker)).all()
-        for bid in old_bids:
-            self.session.delete(bid)
-        
         self.session.add(state)
+        
+        self.create_auction_lots(ticker)
         self.session.commit()
     
     def place_bid(self, user: User, lot_id: int, amount: float):
-        """Place bid on a specific lot"""
+        """Place a bid on a specific lot"""
         state = self.get_state()
         ticker = state.active_auction_asset
+        
         if not ticker:
             raise ValueError("No active auction")
         
-        # Get the lot
-        lot = self.session.get(AuctionLot, lot_id)
-        if not lot or lot.asset_ticker != ticker:
-            raise ValueError("Invalid lot")
+        # Check if asset matches
+        # (Implicitly checked by lot association, but good for safety)
         
+        from .models import AuctionLot
+        lot = self.session.get(AuctionLot, lot_id)
+        if not lot:
+            raise ValueError("Lot not found")
+            
+        if lot.asset_ticker != ticker:
+            raise ValueError("Lot does not belong to active auction asset")
+            
         if lot.status != LotStatus.ACTIVE:
-            raise ValueError("Lot is not active")
+            raise ValueError("Lot is not active for bidding")
         
         # Check if bid is at least base price
         if amount < lot.base_price:
@@ -281,7 +368,7 @@ class MarketEngine:
         self.session.commit()
     
     def resolve_auction(self):
-        """Resolve auction - award each lot to highest bidder"""
+        """Resolve active lot and open next one if available"""
         state = self.get_state()
         ticker = state.active_auction_asset
         if not ticker:
@@ -291,94 +378,102 @@ class MarketEngine:
         if not asset:
             return "Asset not found"
         
-        # Get all active lots
-        lots = self.session.exec(
+        # Get the currently ACTIVE lot
+        active_lot = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
-                AuctionLot.status == LotStatus.ACTIVE
             )
+        ).first()
+        
+        if not active_lot:
+            return "No active lot to resolve"
+        
+        results_msg = ""
+        
+        # Resolve the active lot
+        bids = self.session.exec(
+            select(AuctionBid).where(
+                AuctionBid.lot_id == active_lot.id
+            ).order_by(AuctionBid.amount.desc())
         ).all()
         
-        results = []
-        total_volume = 0
-        weighted_price_sum = 0
-        
-        for lot in lots:
-            # Find highest bid for this lot
-            bids = self.session.exec(
-                select(AuctionBid).where(
-                    AuctionBid.lot_id == lot.id
-                ).order_by(AuctionBid.amount.desc())
-            ).all()
+        if bids:
+            winner_bid = bids[0]
+            winner = self.session.get(User, winner_bid.user_id)
             
-            if bids:
-                winner_bid = bids[0]
-                winner = self.session.get(User, winner_bid.user_id)
+            total_cost = winner_bid.amount * winner_bid.quantity
+            
+            # Check funds
+            if winner.cash >= total_cost:
+                # Execute transaction
+                winner.cash -= total_cost
                 
-                total_cost = winner_bid.amount * winner_bid.quantity
+                # Update/Create Holding
+                holding = self.session.exec(select(Holding).where(
+                    Holding.user_id == winner.id,
+                    Holding.asset_id == asset.id
+                )).first()
                 
-                # Check funds
-                if winner.cash >= total_cost:
-                    # Execute transaction
-                    winner.cash -= total_cost
-                    
-                    # Update/Create Holding
-                    holding = self.session.exec(select(Holding).where(
-                        Holding.user_id == winner.id,
-                        Holding.asset_id == asset.id
-                    )).first()
-                    
-                    if holding:
-                        total_val = (holding.quantity * holding.avg_cost) + total_cost
-                        new_qty = holding.quantity + winner_bid.quantity
-                        holding.avg_cost = total_val / new_qty
-                        holding.quantity = new_qty
-                        self.session.add(holding)
-                    else:
-                        holding = Holding(
-                            user_id=winner.id,
-                            asset_id=asset.id,
-                            quantity=winner_bid.quantity,
-                            avg_cost=winner_bid.amount
-                        )
-                        self.session.add(holding)
-                    
-                    # Update lot
-                    lot.status = LotStatus.SOLD
-                    lot.winner_id = winner.id
-                    lot.winning_bid = winner_bid.amount
-                    
-                    self.session.add(winner)
-                    self.session.add(lot)
-                    
-                    # Track for price update
-                    total_volume += winner_bid.quantity
-                    weighted_price_sum += winner_bid.amount * winner_bid.quantity
-                    
-                    results.append(f"Lot {lot.lot_number}: {winner.username} @ ${winner_bid.amount:,.0f}")
+                if holding:
+                    total_val = (holding.quantity * holding.avg_cost) + total_cost
+                    new_qty = holding.quantity + winner_bid.quantity
+                    holding.avg_cost = total_val / new_qty
+                    holding.quantity = new_qty
+                    self.session.add(holding)
                 else:
-                    lot.status = LotStatus.CANCELLED
-                    self.session.add(lot)
-                    results.append(f"Lot {lot.lot_number}: No sale (insufficient funds)")
+                    holding = Holding(
+                        user_id=winner.id,
+                        asset_id=asset.id,
+                        quantity=winner_bid.quantity,
+                        avg_cost=winner_bid.amount
+                    )
+                    self.session.add(holding)
+                
+                # Update lot
+                active_lot.status = LotStatus.SOLD
+                active_lot.winner_id = winner.id
+                active_lot.winning_bid = winner_bid.amount
+                
+                self.session.add(winner)
+                self.session.add(active_lot)
+                
+                # Incremental Price Update
+                # Weight by volume relative to supply could be better, but simple weighted average is safer for stability
+                # Using 0.95 (current) vs 0.05 (new) to avoid massive swings from small lots
+                asset.current_price = (0.95 * asset.current_price) + (0.05 * winner_bid.amount)
+                self.session.add(asset)
+
+                results_msg = f"Lot {active_lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f}"
             else:
-                lot.status = LotStatus.CANCELLED
-                self.session.add(lot)
-                results.append(f"Lot {lot.lot_number}: No bids")
-        
-        # Update market price based on weighted average of winning bids
-        if total_volume > 0:
-            avg_winning_price = weighted_price_sum / total_volume
-            asset.current_price = (0.7 * asset.current_price) + (0.3 * avg_winning_price)
-            self.session.add(asset)
-        
-        msg = f"Auction for {ticker} completed. " + "; ".join(results)
-        state.active_auction_asset = None
-        state.news_feed = msg
-        state.phase = "TRADING"
-        self.session.add(state)
+                active_lot.status = LotStatus.CANCELLED
+                self.session.add(active_lot)
+                results_msg = f"Lot {active_lot.lot_number} CANCELLED (Winner insufficient funds)"
+        else:
+            active_lot.status = LotStatus.CANCELLED
+            self.session.add(active_lot)
+            results_msg = f"Lot {active_lot.lot_number} CLOSED (No bids)"
+
+        # Activate NEXT lot
+        next_lot = self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.status == LotStatus.PENDING,
+                AuctionLot.lot_number > active_lot.lot_number
+            ).order_by(AuctionLot.lot_number)
+        ).first()
+
+        if next_lot:
+            next_lot.status = LotStatus.ACTIVE
+            self.session.add(next_lot)
+            results_msg += f" | Lot {next_lot.lot_number} now ACTIVE"
+        else:
+            results_msg += " | Auction Complete"
+            state.active_auction_asset = None # Close auction if no lots left
+            state.phase = "TRADING"
+            self.session.add(state)
+            
         self.session.commit()
-        
-        return msg
+        return results_msg
 
     # --- TRADING LOGIC ---
     def execute_trade(self, buyer_id: int, seller_id: int, asset_id: int, qty: int, price: float):

@@ -32,7 +32,7 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
             interval = setInterval(fetchLots, 2000); // Poll every 2s
         }
         return () => clearInterval(interval);
-    }, [isActive, currentTicker]);
+    }, [isActive, currentTicker, selectedLot]);
 
     const handlePlaceBid = async () => {
         if (!selectedLot) {
@@ -159,7 +159,9 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                                             width: '100%',
                                             justifyContent: 'space-between',
                                             padding: '0.75rem 1rem',
-                                            textAlign: 'left'
+                                            textAlign: 'left',
+                                            opacity: lot.status === 'active' ? 1 : 0.6,
+                                            borderLeft: lot.status === 'active' ? '4px solid #10b981' : (lot.status === 'sold' ? '4px solid #ef4444' : '4px solid transparent')
                                         }}
                                     >
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -233,11 +235,16 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                                         />
                                         <button
                                             onClick={handlePlaceBid}
-                                            disabled={loading || !bidAmount}
+                                            disabled={loading || !bidAmount || selectedLot.status !== 'active'}
                                             className="btn btn-primary"
-                                            style={{ fontSize: '1.2rem', padding: '0 2rem' }}
+                                            style={{
+                                                fontSize: '1.2rem',
+                                                padding: '0 2rem',
+                                                opacity: selectedLot.status !== 'active' ? 0.5 : 1,
+                                                cursor: selectedLot.status !== 'active' ? 'not-allowed' : 'pointer'
+                                            }}
                                         >
-                                            {loading ? '...' : 'BID'}
+                                            {loading ? '...' : (selectedLot.status === 'active' ? 'BID' : selectedLot.status.toUpperCase())}
                                         </button>
                                     </div>
 

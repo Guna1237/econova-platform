@@ -7,7 +7,7 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -20,6 +20,8 @@ import TeamPasswordChange from '../components/TeamPasswordChange';
 import LoginStatus from '../components/LoginStatus';
 import TeamManagement from '../components/TeamManagement';
 import DataExport from '../components/DataExport';
+import PrivateTrading from '../components/PrivateTrading';
+import NewsTab from '../components/NewsTab';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -59,8 +61,13 @@ export default function Dashboard() {
             // Check consent status for team users
             if (userData.role === 'team') {
                 try {
-                    const consentStatus = await checkConsentStatus();
-                    setHasConsented(consentStatus.has_consented);
+                    const skipped = sessionStorage.getItem('econova_consent_skipped');
+                    if (skipped) {
+                        setHasConsented(true);
+                    } else {
+                        const consentStatus = await checkConsentStatus();
+                        setHasConsented(consentStatus.has_consented);
+                    }
                 } catch (err) {
                     console.error('Failed to check consent:', err);
                 }
@@ -191,6 +198,7 @@ export default function Dashboard() {
 
     const sidebarItems = [
         { id: 'portfolio', label: 'PORTFOLIO', icon: Wallet },
+        { id: 'news', label: 'NEWS', icon: Play },
         { id: 'marketplace', label: 'MARKETPLACE', icon: TrendingUp },
         { id: 'auction', label: 'AUCTION HALL', icon: Gavel },
         { id: 'credit', label: 'CREDIT NETWORK', icon: Landmark },
@@ -479,42 +487,77 @@ export default function Dashboard() {
                                 )}
 
                                 {activeTab === 'marketplace' && (
-                                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '2rem' }}>
-                                        <div>
-                                            <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Market Depth</h2>
-                                            <div className="fintech-card">
-                                                <div style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>
-                                                    MARKETPLACE ENGINE ACTIVE.
-                                                    <br />Select an asset to view order book.
+                                    <div>
+                                        {/* Admin Controls */}
+                                        {user?.role === 'admin' && (
+                                            <div className="fintech-card" style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#FFF' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                                    <Activity size={20} color={marketState?.marketplace_open ? '#10B981' : '#EF4444'} />
+                                                    <h3 style={{ margin: 0, textTransform: 'uppercase' }}>
+                                                        MARKET STATUS: <span style={{ color: marketState?.marketplace_open ? '#10B981' : '#EF4444' }}>{marketState?.marketplace_open ? 'OPEN FOR TRADING' : 'CLOSED'}</span>
+                                                    </h3>
+                                                </div>
+                                                <div style={{ display: 'flex', gap: '1rem' }}>
+                                                    {!marketState?.marketplace_open ? (
+                                                        <button
+                                                            onClick={async () => {
+                                                                try {
+                                                                    await openMarketplace();
+                                                                    toast.success('Marketplace Opened');
+                                                                    fetchData();
+                                                                } catch (e) { toast.error('Failed to open market'); }
+                                                            }}
+                                                            className="btn"
+                                                            style={{ background: '#10B981', color: '#FFF', fontWeight: 700 }}
+                                                        >
+                                                            OPEN MARKET
+                                                        </button>
+                                                    ) : (
+                                                        <button
+                                                            onClick={async () => {
+                                                                try {
+                                                                    await closeMarketplace();
+                                                                    toast.success('Marketplace Closed');
+                                                                    fetchData();
+                                                                } catch (e) { toast.error('Failed to close market'); }
+                                                            }}
+                                                            className="btn"
+                                                            style={{ background: '#EF4444', color: '#FFF', fontWeight: 700 }}
+                                                        >
+                                                            CLOSE MARKET
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
-                                        </div>
-                                        <div>
-                                            <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Trade Execution</h2>
-                                            <div className="fintech-card" style={{ borderTop: `4px solid ${order.type === 'buy' ? '#D1202F' : '#000'}` }}>
-                                                <div style={{ display: 'flex', gap: '1px', marginBottom: '1.5rem', background: '#000', padding: '1px' }}>
-                                                    <button onClick={() => setOrder({ ...order, type: 'buy' })} style={{ flex: 1, padding: '0.8rem', background: order.type === 'buy' ? '#D1202F' : '#FFF', color: order.type === 'buy' ? '#FFF' : '#000', border: 'none', fontWeight: 700 }}>BUY</button>
-                                                    <button onClick={() => setOrder({ ...order, type: 'sell' })} style={{ flex: 1, padding: '0.8rem', background: order.type === 'sell' ? '#D1202F' : '#FFF', color: order.type === 'sell' ? '#FFF' : '#000', border: 'none', fontWeight: 700 }}>SELL</button>
+                                        )}
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
+                                            {/* Private Trading Interface (Full Width) */}
+                                            <PrivateTrading user={user} marketState={marketState} assets={assets} />
+
+                                            {/* Market Reference (Order Book / Prices) - Optional, kept for reference */}
+                                            <div>
+                                                <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Reference Prices</h2>
+                                                <div className="fintech-card">
+                                                    <table style={{ width: '100%' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#F9FAFB', textAlign: 'left' }}>
+                                                                <th style={{ padding: '0.5rem' }}>ASSET</th>
+                                                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>PRICE</th>
+                                                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>CHANGE</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {assets.map(a => (
+                                                                <tr key={a.id} style={{ borderBottom: '1px solid #E5E7EB' }}>
+                                                                    <td style={{ padding: '0.5rem', fontWeight: 600 }}>{a.ticker}</td>
+                                                                    <td className="mono-num" style={{ padding: '0.5rem', textAlign: 'right' }}>${a.current_price.toFixed(2)}</td>
+                                                                    <td className="mono-num" style={{ padding: '0.5rem', textAlign: 'right', color: '#666' }}>--</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
                                                 </div>
-                                                <form onSubmit={handleOrderSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                                                    <div>
-                                                        <label className="text-label" style={{ color: '#000' }}>ASSET</label>
-                                                        <select className="input-field" value={order.assetId} onChange={e => setOrder({ ...order, assetId: e.target.value })} style={{ borderRadius: 0, border: '1px solid #000' }}>
-                                                            {assets.map(a => <option key={a.id} value={a.id}>{a.ticker} (${a.current_price.toFixed(2)})</option>)}
-                                                        </select>
-                                                    </div>
-                                                    <div>
-                                                        <label className="text-label" style={{ color: '#000' }}>QUANTITY</label>
-                                                        <input type="number" className="input-field mono-num" value={order.quantity} onChange={e => setOrder({ ...order, quantity: e.target.value })} style={{ borderRadius: 0, border: '1px solid #000' }} />
-                                                    </div>
-                                                    <div>
-                                                        <label className="text-label" style={{ color: '#000' }}>LIMIT PRICE</label>
-                                                        <input type="number" className="input-field mono-num" value={order.price} onChange={e => setOrder({ ...order, price: e.target.value })} style={{ borderRadius: 0, border: '1px solid #000' }} />
-                                                    </div>
-                                                    <button type="submit" className="btn" style={{ background: '#000', color: '#FFF', width: '100%', borderRadius: 0, padding: '1rem', textTransform: 'uppercase' }}>
-                                                        EXECUTE {order.type} ORDER
-                                                    </button>
-                                                </form>
                                             </div>
                                         </div>
                                     </div>
@@ -526,6 +569,14 @@ export default function Dashboard() {
 
                                 {activeTab === 'credit' && (
                                     <CreditNetwork user={user} />
+                                )}
+
+                                {activeTab === 'news' && (
+                                    <NewsTab user={user} />
+                                )}
+
+                                {activeTab === 'news' && (
+                                    <NewsTab user={user} />
                                 )}
 
                                 {activeTab === 'analysis' && (

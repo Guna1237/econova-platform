@@ -7,7 +7,7 @@ from .database import create_db_and_tables, get_session, engine
 from .engine import MarketEngine
 from fastapi.security import OAuth2PasswordRequestForm
 from .auth import create_access_token, get_current_admin, get_current_user, get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES
-from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot
+from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot, PrivateOffer, Transaction, OfferStatus, NewsItem
 from .activity_logger import ActivityLogger
 from .admin_tools import AdminTools
 from pydantic import BaseModel, EmailStr
@@ -22,6 +22,14 @@ class LoanOfferCreate(BaseModel):
     principal: float
     interest_rate: float
 
+class PrivateOfferCreate(BaseModel):
+    to_username: Optional[str] = None # None means open offer to anyone
+    asset_ticker: str
+    offer_type: str # BUY or SELL
+    quantity: int
+    price_per_unit: float
+    message: Optional[str] = None
+
 class ShockTrigger(BaseModel):
     type: str # INFLATION, RECESSION, NONE
     action: str # HINT, CRASH
@@ -31,6 +39,13 @@ class ConsentAccept(BaseModel):
     email: EmailStr
     age: int
     team_size: int = 1
+
+class NewsCreate(BaseModel):
+    title: str
+    content: str
+    is_published: bool = False
+    image_url: Optional[str] = None
+    source: str = "Global News Network"
 
 class BidLotCreate(BaseModel):
     lot_id: int
@@ -44,6 +59,11 @@ class PriceNudge(BaseModel):
 class AdminCredUpdate(BaseModel):
     new_username: Optional[str] = None
     new_password: Optional[str] = None
+
+class ActivityLogRequest(BaseModel):
+    action_type: str
+    action_details: dict
+    duration_ms: Optional[int] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -183,7 +203,11 @@ def place_bid(bid: BidLotCreate, user: User = Depends(get_current_user), session
     
     try:
         sim.place_bid(user, bid.lot_id, bid.amount)
-        logger.log_bid(user.id, sim.get_state().active_auction_asset, bid.lot_id, bid.amount, 0)
+        # Get the lot to retrieve quantity for logging
+        from .models import AuctionLot
+        lot = session.get(AuctionLot, bid.lot_id)
+        quantity = lot.quantity if lot else 0
+        logger.log_bid(user.id, sim.get_state().active_auction_asset, bid.lot_id, bid.amount, quantity)
         return {"message": "Bid placed successfully"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -346,7 +370,241 @@ def place_order_endpoint(order: OrderCreate, user: User = Depends(get_current_us
         raise HTTPException(status_code=400, detail=str(e))
 
 
+
+# --- PRIVATE TRADING ---
+
+@app.post("/offers/create")
+def create_private_offer(
+    offer: PrivateOfferCreate, 
+    user: User = Depends(get_current_user), 
+    session: Session = Depends(get_session)
+):
+    """Create a private buy/sell offer"""
+    # Check if marketplace is open
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.marketplace_open:
+        raise HTTPException(status_code=400, detail="Marketplace is currently closed")
+        
+    # Validation
+    if offer.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be positive")
+    if offer.price_per_unit <= 0:
+        raise HTTPException(status_code=400, detail="Price must be positive")
+        
+    # Get to_user if specified
+    to_user_id = None
+    if offer.to_username:
+        to_user = session.exec(select(User).where(User.username == offer.to_username)).first()
+        if not to_user:
+            raise HTTPException(status_code=404, detail="Target user not found")
+        if to_user.id == user.id:
+            raise HTTPException(status_code=400, detail="Cannot offer to self")
+        to_user_id = to_user.id
+    
+    # Check asset validity
+    asset = session.exec(select(Asset).where(Asset.ticker == offer.asset_ticker)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # If selling, check ownership
+    if offer.offer_type.upper() == "SELL":
+        holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
+        if not holding or holding.quantity < offer.quantity:
+             raise HTTPException(status_code=400, detail="Insufficient assets to sell")
+    
+    # If buying, check cash (optional, but good practice)
+    # total_cost = offer.quantity * offer.price_per_unit
+    # if offer.offer_type.upper() == "BUY" and user.cash < total_cost:
+    #    raise HTTPException(status_code=400, detail="Insufficient cash")
+
+    # Create offer
+    otype = OrderType.BUY if offer.offer_type.upper() == "BUY" else OrderType.SELL
+    
+    new_offer = PrivateOffer(
+        from_user_id=user.id,
+        to_user_id=to_user_id,
+        asset_ticker=offer.asset_ticker,
+        offer_type=otype,
+        quantity=offer.quantity,
+        price_per_unit=offer.price_per_unit,
+        total_value=offer.quantity * offer.price_per_unit,
+        message=offer.message,
+        status=OfferStatus.PENDING
+    )
+    
+    session.add(new_offer)
+    session.commit()
+    
+    return {"message": "Offer created successfully", "offer_id": new_offer.id}
+
+@app.get("/offers/my")
+def get_my_offers(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Get all offers sent by or received by current user"""
+    sent = session.exec(
+        select(PrivateOffer).where(PrivateOffer.from_user_id == user.id).order_by(PrivateOffer.created_at.desc())
+    ).all()
+    
+    received = session.exec(
+        select(PrivateOffer).where(PrivateOffer.to_user_id == user.id).order_by(PrivateOffer.created_at.desc())
+    ).all()
+    
+    # Also get open offers if user didn't create them
+    open_offers = session.exec(
+        select(PrivateOffer).where(PrivateOffer.to_user_id == None, PrivateOffer.from_user_id != user.id, PrivateOffer.status == OfferStatus.PENDING)
+    ).all()
+    
+    return {
+        "sent": sent,
+        "received": received,
+        "open_market": open_offers
+    }
+
+@app.post("/offers/{offer_id}/accept")
+def accept_offer(offer_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Accept a pending offer"""
+    # Check market open
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.marketplace_open:
+        raise HTTPException(status_code=400, detail="Marketplace is currently closed")
+
+    offer = session.get(PrivateOffer, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+        
+    if offer.status != OfferStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Offer is {offer.status}")
+        
+    # Verify recipient (if targeted)
+    if offer.to_user_id and offer.to_user_id != user.id:
+        raise HTTPException(status_code=403, detail="This offer is not for you")
+        
+    if offer.from_user_id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot accept your own offer")
+        
+    # Execute Trade
+    buyer_id = None
+    seller_id = None
+    
+    if offer.offer_type == OrderType.SELL:
+        # Offerer is SELLING, User is BUYING
+        seller_id = offer.from_user_id
+        buyer_id = user.id
+    else:
+        # Offerer is BUYING, User is SELLING
+        buyer_id = offer.from_user_id
+        seller_id = user.id
+        
+    buyer = session.get(User, buyer_id)
+    seller = session.get(User, seller_id)
+    asset = session.exec(select(Asset).where(Asset.ticker == offer.asset_ticker)).first()
+    
+    total_cost = offer.total_value
+    
+    # Check constraints
+    if buyer.cash < total_cost:
+        raise HTTPException(status_code=400, detail="Buyer has insufficient cash")
+        
+    seller_holding = session.exec(select(Holding).where(Holding.user_id == seller.id, Holding.asset_id == asset.id)).first()
+    if not seller_holding or seller_holding.quantity < offer.quantity:
+        raise HTTPException(status_code=400, detail="Seller has insufficient assets")
+        
+    # Execute Transfer
+    buyer.cash -= total_cost
+    seller.cash += total_cost
+    
+    seller_holding.quantity -= offer.quantity
+    
+    buyer_holding = session.exec(select(Holding).where(Holding.user_id == buyer.id, Holding.asset_id == asset.id)).first()
+    if not buyer_holding:
+        buyer_holding = Holding(user_id=buyer.id, asset_id=asset.id, quantity=0, average_cost=0)
+        session.add(buyer_holding)
+        
+    # Update average cost
+    current_val = buyer_holding.quantity * buyer_holding.average_cost
+    new_val = current_val + total_cost
+    buyer_holding.quantity += offer.quantity
+    buyer_holding.average_cost = new_val / buyer_holding.quantity
+    
+    # Update Offer Status
+    offer.status = OfferStatus.ACCEPTED
+    offer.responded_at = datetime.utcnow()
+    
+    # Create Transaction Record
+    txn = Transaction(
+        buyer_id=buyer.id,
+        seller_id=seller.id,
+        asset_ticker=offer.asset_ticker,
+        quantity=offer.quantity,
+        price_per_unit=offer.price_per_unit,
+        total_value=total_cost,
+        offer_id=offer.id
+    )
+    
+    session.add(buyer)
+    session.add(seller)
+    session.add(seller_holding)
+    session.add(buyer_holding)
+    session.add(offer)
+    session.add(txn)
+    
+    session.commit()
+    
+    return {"message": "Offer accepted and trade executed", "transaction_id": txn.id}
+
+@app.post("/offers/{offer_id}/reject")
+def reject_offer(offer_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Reject an offer sent to you"""
+    offer = session.get(PrivateOffer, offer_id)
+    if not offer:
+        raise HTTPException(status_code=404, detail="Offer not found")
+        
+    if offer.to_user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to reject this offer")
+        
+    if offer.status != OfferStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Offer not pending")
+        
+    offer.status = OfferStatus.REJECTED
+    offer.responded_at = datetime.utcnow()
+    session.add(offer)
+    session.commit()
+    
+    return {"message": "Offer rejected"}
+
+@app.get("/transactions")
+def get_transactions(session: Session = Depends(get_session)):
+    """Get all public transactions for transparency"""
+    txns = session.exec(select(Transaction).order_by(Transaction.timestamp.desc())).all()
+    
+    # Enrich with usernames
+    result = []
+    for txn in txns:
+        buyer = session.get(User, txn.buyer_id)
+        seller = session.get(User, txn.seller_id)
+        result.append({
+            **txn.dict(),
+            "buyer_username": buyer.username if buyer else "Unknown",
+            "seller_username": seller.username if seller else "Unknown"
+        })
+    return result
+
 # --- ADMIN ---
+
+@app.post("/admin/marketplace/open")
+def open_marketplace(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    state = session.exec(select(MarketState)).first()
+    state.marketplace_open = True
+    session.add(state)
+    session.commit()
+    return {"message": "Marketplace opened for trading"}
+
+@app.post("/admin/marketplace/close")
+def close_marketplace(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    state = session.exec(select(MarketState)).first()
+    state.marketplace_open = False
+    session.add(state)
+    session.commit()
+    return {"message": "Marketplace closed"}
 
 @app.post("/admin/next-turn")
 def next_turn(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
@@ -562,6 +820,72 @@ def update_admin_credentials(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+# --- NEWS SYSTEM ---
+
+@app.get("/news")
+def get_news(session: Session = Depends(get_session)):
+    """Get all published news"""
+    news = session.exec(select(NewsItem).where(NewsItem.is_published == True).order_by(NewsItem.published_at.desc())).all()
+    return news
+
+@app.get("/admin/news/all")
+def get_all_news_admin(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get ALL news (including drafts) for admin"""
+    news = session.exec(select(NewsItem).order_by(NewsItem.published_at.desc())).all()
+    return news
+
+@app.post("/admin/news/create")
+def create_news(
+    news: NewsCreate,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    item = NewsItem(
+        title=news.title,
+        content=news.content,
+        is_published=news.is_published,
+        image_url=news.image_url,
+        source=news.source,
+        published_at=datetime.utcnow()
+    )
+    session.add(item)
+    session.commit()
+    return {"message": "News item created", "id": item.id}
+
+@app.put("/admin/news/{news_id}")
+def update_news(
+    news_id: int,
+    news: NewsCreate,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    item = session.get(NewsItem, news_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="News item not found")
+        
+    item.title = news.title
+    item.content = news.content
+    item.is_published = news.is_published
+    item.image_url = news.image_url
+    item.source = news.source
+    
+    session.add(item)
+    session.commit()
+    return {"message": "News item updated"}
+
+@app.delete("/admin/news/{news_id}")
+def delete_news(
+    news_id: int,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    item = session.get(NewsItem, news_id)
+    if item:
+        session.delete(item)
+        session.commit()
+    return {"message": "News item deleted"}
+
 # --- DATA EXPORT ---
 
 @app.get("/admin/export/activity")
@@ -608,9 +932,7 @@ def get_research_summary(
 
 @app.post("/activity/log")
 def log_activity(
-    action_type: str,
-    action_details: dict,
-    duration_ms: Optional[int] = None,
+    log_request: ActivityLogRequest,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
@@ -618,9 +940,9 @@ def log_activity(
     logger = ActivityLogger(session)
     logger.log_action(
         user_id=user.id,
-        action_type=action_type,
-        action_details=action_details,
-        duration_ms=duration_ms
+        action_type=log_request.action_type,
+        action_details=log_request.action_details,
+        duration_ms=log_request.duration_ms
     )
     return {"message": "Activity logged"}
 
