@@ -31,7 +31,7 @@ export default function Dashboard() {
     const [portfolio, setPortfolio] = useState([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('portfolio');
-    const [hasConsented, setHasConsented] = useState(true); // Default true to avoid blocking
+    const [hasConsented, setHasConsented] = useState(false); // Default false to ensure form shows if check fails
 
     // Admin State
     const [adminUsers, setAdminUsers] = useState([]);

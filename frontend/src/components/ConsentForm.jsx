@@ -42,6 +42,7 @@ export default function ConsentForm({ onConsentAccepted }) {
                 toast.success('Consent already recorded');
                 onConsentAccepted();
             } else {
+                console.error("Consent Error:", error.response?.data);
                 toast.error(errorMsg);
             }
         } finally {
