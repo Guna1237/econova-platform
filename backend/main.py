@@ -1143,3 +1143,55 @@ def liquidate_user(
     session.commit()
     
     return {"message": f"Liquidated all assets for ${total_value:,.2f}", "cash_added": total_value}
+
+
+# --- CONSENT ENDPOINTS (Fixing Missing Implementation) ---
+
+@app.post("/consent/accept")
+def submit_consent(
+    form_data: ConsentAccept,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Record user consent and team leader info"""
+    # 1. Check if already consented
+    existing = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
+    if existing:
+        return {"message": "Already consented"}
+        
+    # 2. Create Consent Record
+    consent = ConsentRecord(
+        user_id=user.id,
+        ip_address="0.0.0.0", # Placeholder, would get from request in real deploys
+        consent_text_version="v1.0"
+    )
+    session.add(consent)
+    
+    # 3. Save Leader Info
+    info = TeamLeaderInfo(
+        user_id=user.id,
+        leader_name=form_data.leader_name,
+        email=form_data.email,
+        age=form_data.age,
+        team_size=form_data.team_size
+    )
+    session.add(info)
+    
+    # 4. Update User Profile
+    user.has_consented = True
+    session.add(user)
+    
+    session.commit()
+    return {"message": "Consent recorded successfully"}
+
+@app.get("/consent/status")
+def check_consent_status(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Check if current user has provided consent"""
+    # Check both the user flag and the record for robustness
+    record = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
+    has_consented = user.has_consented or (record is not None)
+    
+    return {"has_consented": has_consented}
