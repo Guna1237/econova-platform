@@ -1,10 +1,20 @@
 from sqlmodel import SQLModel, create_engine, Session
 
-sqlite_file_name = "econova_v4.db"
-sqlite_url = f"sqlite:///{sqlite_file_name}"
+import os
 
-connect_args = {"check_same_thread": False}
-engine = create_engine(sqlite_url, echo=False, connect_args=connect_args)
+# Check for DATABASE_URL (Render/Postgres) or fall back to local SQLite
+database_url = os.getenv("DATABASE_URL")
+
+if database_url and (database_url.startswith("postgres://") or database_url.startswith("postgresql://")):
+    # Fix Render's postgres:// usage for SQLAlchemy (needs postgresql://)
+    database_url = database_url.replace("postgres://", "postgresql://")
+    engine = create_engine(database_url, echo=False)
+else:
+    # Local SQLite
+    sqlite_file_name = "econova_v4.db"
+    sqlite_url = f"sqlite:///{sqlite_file_name}"
+    connect_args = {"check_same_thread": False}
+    engine = create_engine(sqlite_url, echo=False, connect_args=connect_args)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
