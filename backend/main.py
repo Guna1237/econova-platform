@@ -93,6 +93,7 @@ app.add_middleware(
 # --- PUBLIC ENDPOINTS ---
 
 @app.get("/health")
+@app.head("/health")
 def health_check(): return {"status": "healthy"}
 
 @app.post("/token")
