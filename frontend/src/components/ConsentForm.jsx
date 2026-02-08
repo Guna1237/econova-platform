@@ -221,20 +221,22 @@ export default function ConsentForm({ onConsentAccepted }) {
                             </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '1.5rem' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
                             <button
                                 type="submit"
                                 disabled={loading}
                                 className="btn"
                                 style={{
-                                    flex: 2,
+                                    width: '100%',
                                     background: '#000000',
                                     color: '#FFFFFF',
                                     border: 'none',
-                                    padding: '1rem',
-                                    fontSize: '1.1rem',
+                                    padding: '1.2rem',
+                                    fontSize: '1.2rem',
                                     fontWeight: 700,
-                                    cursor: loading ? 'wait' : 'pointer'
+                                    cursor: loading ? 'wait' : 'pointer',
+                                    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+                                    transition: 'transform 0.1s ease'
                                 }}
                             >
                                 {loading ? 'SUBMITTING...' : 'I CONSENT & CONTINUE'}
@@ -243,18 +245,17 @@ export default function ConsentForm({ onConsentAccepted }) {
                             <button
                                 type="button"
                                 onClick={handleSkip}
-                                className="btn"
                                 style={{
-                                    flex: 1,
                                     background: 'transparent',
-                                    color: '#666',
-                                    border: '2px solid #E5E7EB',
-                                    padding: '1rem',
-                                    fontSize: '1rem',
-                                    fontWeight: 600
+                                    color: '#9CA3AF',
+                                    border: 'none',
+                                    padding: '0.5rem',
+                                    fontSize: '0.9rem',
+                                    textDecoration: 'underline',
+                                    cursor: 'pointer'
                                 }}
                             >
-                                SKIP FOR NOW
+                                Skip for now (I will decide later)
                             </button>
                         </div>
                         <p style={{ marginTop: '1.5rem', textAlign: 'center', color: '#9CA3AF', fontSize: '0.9rem' }}>

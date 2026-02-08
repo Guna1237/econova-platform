@@ -63,9 +63,11 @@ export default function Dashboard() {
                 try {
                     const skipped = sessionStorage.getItem('econova_consent_skipped');
                     if (skipped) {
+                        console.log("Consent hidden due to sessionStorage skip");
                         setHasConsented(true);
                     } else {
                         const consentStatus = await checkConsentStatus();
+                        console.log("Consent API Status:", consentStatus);
                         setHasConsented(consentStatus.has_consented);
                     }
                 } catch (err) {
