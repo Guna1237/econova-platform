@@ -4,7 +4,7 @@ import { Gavel, TrendingUp, AlertCircle, Play, CheckCircle, Package } from 'luci
 import { getAuctionLots, placeLotBid, openAuction, resolveAuction } from '../services/api';
 import { toast } from 'sonner';
 
-export default function AuctionHouse({ user, marketState, onUpdate }) {
+export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }) {
     const [lots, setLots] = useState([]);
     const [selectedLot, setSelectedLot] = useState(null);
     const [bidAmount, setBidAmount] = useState('');
@@ -20,7 +20,11 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                 try {
                     const data = await getAuctionLots();
                     setLots(data);
-                    if (data.length > 0 && !selectedLot) {
+                    // Update selectedLot with fresh data if it exists
+                    if (selectedLot) {
+                        const updated = data.find(l => l.id === selectedLot.id);
+                        if (updated) setSelectedLot(updated);
+                    } else if (data.length > 0) {
                         setSelectedLot(data[0]);
                     }
                 } catch (e) {
@@ -32,7 +36,7 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
             interval = setInterval(fetchLots, 2000); // Poll every 2s
         }
         return () => clearInterval(interval);
-    }, [isActive, currentTicker, selectedLot]);
+    }, [isActive, currentTicker, lastUpdate]); // Added lastUpdate dependency
 
     const handlePlaceBid = async () => {
         if (!selectedLot) {

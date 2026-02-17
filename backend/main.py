@@ -1031,7 +1031,7 @@ def get_all_news_admin(user: User = Depends(get_current_admin), session: Session
     return news
 
 @app.post("/admin/news/create")
-def create_news(
+async def create_news(
     news: NewsCreate,
     user: User = Depends(get_current_admin),
     session: Session = Depends(get_session)
@@ -1047,13 +1047,17 @@ def create_news(
         )
         session.add(item)
         session.commit()
+        
+        if item.is_published:
+            await ws_manager.broadcast("news_update", {"title": item.title})
+            
         return {"message": "News item created", "id": item.id}
     except Exception as e:
         print(f"Error creating news: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to create news: {str(e)}")
 
 @app.put("/admin/news/{news_id}")
-def update_news(
+async def update_news(
     news_id: int,
     news: NewsCreate,
     user: User = Depends(get_current_admin),
@@ -1071,10 +1075,14 @@ def update_news(
     
     session.add(item)
     session.commit()
+    
+    if item.is_published:
+        await ws_manager.broadcast("news_update", {"title": item.title})
+        
     return {"message": "News item updated"}
 
 @app.delete("/admin/news/{news_id}")
-def delete_news(
+async def delete_news(
     news_id: int,
     user: User = Depends(get_current_admin),
     session: Session = Depends(get_session)
@@ -1083,6 +1091,7 @@ def delete_news(
     if item:
         session.delete(item)
         session.commit()
+        await ws_manager.broadcast("news_update", {"action": "deleted"})
     return {"message": "News item deleted"}
 
 # --- DATA EXPORT ---

@@ -42,6 +42,51 @@ export default function Dashboard() {
     const [order, setOrder] = useState({ assetId: '', type: 'buy', quantity: '', price: '' });
     const [selectedAsset, setSelectedAsset] = useState(null);
     const selectedAssetTickerRef = useRef(null); // Track selected ticker across refreshes
+    const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force refresh for children
+
+    // Notifications State
+    const [notifications, setNotifications] = useState({
+        news: false,
+        marketplace: false,
+        auction: false,
+        credit: false,
+        treasury: false
+    });
+
+    const playNotificationSound = (type = 'standard') => {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const now = ctx.currentTime;
+
+            if (type === 'time') {
+                // Major Chord Arpeggio (C4-E4-G4) for success/time advance
+                [261.63, 329.63, 392.00].forEach((freq, i) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'triangle';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.1);
+                    gain.gain.setValueAtTime(0.1, now + i * 0.1);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.5);
+                    osc.start(now + i * 0.1);
+                    osc.stop(now + i * 0.1 + 0.5);
+                });
+            } else {
+                // Standard Beep
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, now); // A5
+                gain.gain.setValueAtTime(0.1, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+                osc.start(now);
+                osc.stop(now + 0.3);
+            }
+        } catch (e) { console.error("Audio play failed", e); }
+    };
 
     const navigate = useNavigate();
 
@@ -123,8 +168,32 @@ export default function Dashboard() {
 
         // WebSocket for instant real-time updates
         const cleanupWs = connectWebSocket((msg) => {
-            console.log('[WS] Event:', msg.type);
-            if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed'].includes(msg.type)) {
+            console.log('[WS] Event:', msg.type, msg.data);
+            setLastUpdate(Date.now()); // Trigger updates for dependent components
+
+            // Notification Logic
+            let notifyTab = null;
+            let soundType = 'standard';
+
+            if (msg.type === 'bid_placed' || msg.type === 'auction_update') notifyTab = 'auction';
+            if (msg.type === 'trade_executed') notifyTab = 'marketplace';
+            if (msg.type === 'news_update') notifyTab = 'news';
+            if (msg.type === 'market_update') {
+                const action = msg.data?.action || '';
+                if (action.includes('loan')) notifyTab = 'credit';
+                if (action.includes('year') || action.includes('quarter')) {
+                    soundType = 'time';
+                    playNotificationSound('time'); // Always play time sound regardless of tab
+                }
+            }
+
+            // Only notify if we are NOT on that tab currently
+            if (notifyTab && activeTab !== notifyTab) {
+                setNotifications(prev => ({ ...prev, [notifyTab]: true }));
+                if (soundType !== 'time') playNotificationSound('standard');
+            }
+
+            if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed', 'news_update'].includes(msg.type)) {
                 fetchData();
             }
         });
@@ -366,7 +435,10 @@ export default function Dashboard() {
                         {sidebarItems.map(item => (
                             <button
                                 key={item.id}
-                                onClick={() => setActiveTab(item.id)}
+                                onClick={() => {
+                                    setActiveTab(item.id);
+                                    setNotifications(prev => ({ ...prev, [item.id]: false })); // Clear notification
+                                }}
                                 style={{
                                     display: 'flex',
                                     alignItems: 'center',
@@ -384,6 +456,16 @@ export default function Dashboard() {
                             >
                                 <item.icon size={18} />
                                 {item.label}
+                                {notifications[item.id] && (
+                                    <div style={{
+                                        width: '8px',
+                                        height: '8px',
+                                        borderRadius: '50%',
+                                        background: '#D1202F',
+                                        boxShadow: '0 0 5px #D1202F',
+                                        marginLeft: 'auto'
+                                    }} />
+                                )}
                             </button>
                         ))}
                     </nav>
@@ -594,7 +676,7 @@ export default function Dashboard() {
                                 )}
 
                                 {activeTab === 'auction' && (
-                                    <AuctionHouse user={user} marketState={marketState} onUpdate={fetchData} />
+                                    <AuctionHouse user={user} marketState={marketState} onUpdate={fetchData} lastUpdate={lastUpdate} />
                                 )}
 
                                 {activeTab === 'treasury' && (
@@ -660,6 +742,6 @@ export default function Dashboard() {
                     </div>
                 </main>
             </div>
-        </div>
+        </div >
     );
 }
