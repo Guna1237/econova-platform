@@ -1,17 +1,27 @@
 from contextlib import asynccontextmanager
-from typing import List, Optional
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.middleware.cors import CORSMiddleware 
+from typing import List, Optional, Literal
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
 from .database import create_db_and_tables, get_session, engine
 from .engine import MarketEngine
 from fastapi.security import OAuth2PasswordRequestForm
-from .auth import create_access_token, get_current_admin, get_current_user, get_password_hash, verify_password, ACCESS_TOKEN_EXPIRE_MINUTES
+from .auth import create_access_token, get_current_admin, get_current_user, get_active_user, get_password_hash, verify_password, validate_password_strength, ACCESS_TOKEN_EXPIRE_MINUTES
 from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot, PrivateOffer, Transaction, OfferStatus, NewsItem
 from .activity_logger import ActivityLogger
 from .admin_tools import AdminTools
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 from fastapi.responses import Response
+from datetime import datetime, timezone
+import os
+import json
+import logging
+import secrets
+
+logger = logging.getLogger(__name__)
+
+# Valid tickers for whitelisting
+VALID_TICKERS = {'GOLD', 'TECH', 'OIL', 'REAL', 'TBILL'}
 
 # --- Pydantic Schemas for Requests ---
 class BidCreate(BaseModel):
@@ -21,18 +31,32 @@ class LoanOfferCreate(BaseModel):
     borrower_username: str
     principal: float
     interest_rate: float
+    
+    @field_validator('principal')
+    @classmethod
+    def principal_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Principal must be positive')
+        return v
+
+    @field_validator('interest_rate')
+    @classmethod
+    def rate_non_negative(cls, v):
+        if v < 0:
+            raise ValueError('Interest rate cannot be negative')
+        return v
 
 class PrivateOfferCreate(BaseModel):
-    to_username: Optional[str] = None # None means open offer to anyone
+    to_username: Optional[str] = None
     asset_ticker: str
-    offer_type: str # BUY or SELL
+    offer_type: str
     quantity: int
     price_per_unit: float
     message: Optional[str] = None
 
 class ShockTrigger(BaseModel):
-    type: str # INFLATION, RECESSION, NONE
-    action: str # HINT, CRASH
+    type: Literal['INFLATION', 'RECESSION']
+    action: Literal['HINT', 'WARNING', 'CRASH']
 
 class ConsentAccept(BaseModel):
     leader_name: str
@@ -50,11 +74,25 @@ class NewsCreate(BaseModel):
 class BidLotCreate(BaseModel):
     lot_id: int
     amount: float
+    
+    @field_validator('amount')
+    @classmethod
+    def amount_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Bid amount must be positive')
+        return v
 
 class PriceNudge(BaseModel):
     ticker: str
     adjustment_pct: Optional[float] = None
     adjustment_abs: Optional[float] = None
+    
+    @field_validator('ticker')
+    @classmethod
+    def ticker_valid(cls, v):
+        if v.upper() not in VALID_TICKERS:
+            raise ValueError(f'Invalid ticker: {v}')
+        return v.upper()
 
 class AdminCredUpdate(BaseModel):
     new_username: Optional[str] = None
@@ -75,20 +113,65 @@ async def lifespan(app: FastAPI):
         # Ensure Admin
         admin = session.exec(select(User).where(User.username == "admin")).first()
         if not admin:
+            from .auth import get_password_hash
             session.add(User(username="admin", hashed_password=get_password_hash("admin123"), role=Role.ADMIN))
         
         session.commit()
     yield
 
+# --- WebSocket Connection Manager ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, event_type: str, data: dict = None):
+        message = json.dumps({"type": event_type, "data": data or {}})
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                disconnected.append(connection)
+        for conn in disconnected:
+            self.disconnect(conn)
+
+ws_manager = ConnectionManager()
+
 app = FastAPI(title="Econova API", lifespan=lifespan)
+
+# Restrict CORS in production
+environment = os.getenv("ENVIRONMENT", "development")
+allow_origins = ["*"] if environment == "development" else [os.getenv("FRONTEND_URL", "*")]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- WebSocket Endpoint ---
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive, wait for pings
+            data = await websocket.receive_text()
+            # Client can send 'ping' to keep alive
+            if data == 'ping':
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
 
 # --- PUBLIC ENDPOINTS ---
 
@@ -102,13 +185,13 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
-    # Update last login time
-    from datetime import datetime
-    user.last_login = datetime.utcnow()
+    # Update last login time and generate new session ID
+    user.last_login = datetime.now(timezone.utc)
+    user.session_id = secrets.token_hex(16)
     session.add(user)
     session.commit()
     
-    access_token = create_access_token(data={"sub": user.username})
+    access_token = create_access_token(data={"sub": user.username, "sid": user.session_id})
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -132,12 +215,12 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 # --- MARKET DATA ---
 
 @app.get("/market/state")
-def get_state(session: Session = Depends(get_session)):
+def get_state(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
     return sim.get_state()
 
 @app.get("/market/assets")
-def get_assets(session: Session = Depends(get_session)):
+def get_assets(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     return session.exec(select(Asset)).all()
 
 @app.get("/users/me")
@@ -165,8 +248,37 @@ def get_portfolio(user: User = Depends(get_current_user), session: Session = Dep
 
 # --- HISTORICAL DATA ---
 @app.get("/market/history/{asset_id}")
-def get_price_history(asset_id: int, session: Session = Depends(get_session)):
-    return session.exec(select(PriceHistory).where(PriceHistory.asset_id == asset_id).order_by(PriceHistory.year)).all()
+def get_price_history(asset_id: int, quarterly: bool = False, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Get price history. Use quarterly=true for quarterly data, false for yearly snapshots."""
+    # Validate asset exists
+    asset = session.get(Asset, asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    query = select(PriceHistory).where(PriceHistory.asset_id == asset_id)
+    if not quarterly:
+        query = query.where((PriceHistory.quarter == 0) | (PriceHistory.quarter == 4))
+    query = query.order_by(PriceHistory.year, PriceHistory.quarter)
+    return session.exec(query).all()
+
+class UserRegister(BaseModel):
+    username: str
+    password: str
+
+@app.post("/register-simple") 
+def register(data: UserRegister, admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Create a new user (admin-only)"""
+    validate_password_strength(data.password)
+    if len(data.username) < 2 or len(data.username) > 30:
+        raise HTTPException(status_code=400, detail="Username must be 2-30 characters")
+    if session.exec(select(User).where(User.username == data.username)).first():
+        raise HTTPException(status_code=400, detail="User already exists")
+    user = User(username=data.username, hashed_password=get_password_hash(data.password))
+    session.add(user)
+    session.commit()
+    return {"message": "User created"}
+
+# --- MARKET DATA ---
+# ...
 
 # --- ADMIN USER MANAGEMENT ---
 
@@ -175,29 +287,23 @@ def get_all_users(user: User = Depends(get_current_admin), session: Session = De
     return session.exec(select(User).where(User.role == Role.TEAM)).all()
 
 @app.post("/admin/users/create")
-def create_team_user(username: str, password: str, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
-    if session.exec(select(User).where(User.username == username)).first():
+def create_team_user(data: UserRegister, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    validate_password_strength(data.password)
+    if len(data.username) < 2 or len(data.username) > 30:
+        raise HTTPException(status_code=400, detail="Username must be 2-30 characters")
+    if session.exec(select(User).where(User.username == data.username)).first():
         raise HTTPException(status_code=400, detail="User exists")
-    new_user = User(username=username, hashed_password=get_password_hash(password), role=Role.TEAM)
+    new_user = User(username=data.username, hashed_password=get_password_hash(data.password), role=Role.TEAM)
     session.add(new_user)
     session.commit()
-    return {"message": f"Team {username} created"}
+    return {"message": f"Team {data.username} created"}
 
-@app.post("/admin/users/{user_id}/freeze")
-def toggle_user_freeze(user_id: int, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
-    target_user = session.get(User, user_id)
-    if not target_user: raise HTTPException(status_code=404, detail="User not found")
-    
-    target_user.is_frozen = not target_user.is_frozen
-    status_msg = "frozen" if target_user.is_frozen else "active"
-    session.add(target_user)
-    session.commit()
-    return {"message": f"User {target_user.username} is now {status_msg}"}
+
 
 # --- ACTIONS ---
 
 @app.post("/auction/bid")
-def place_bid(bid: BidLotCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def place_bid(bid: BidLotCreate, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     """Place bid on a specific auction lot"""
     sim = MarketEngine(session)
     logger = ActivityLogger(session)
@@ -209,12 +315,13 @@ def place_bid(bid: BidLotCreate, user: User = Depends(get_current_user), session
         lot = session.get(AuctionLot, bid.lot_id)
         quantity = lot.quantity if lot else 0
         logger.log_bid(user.id, sim.get_state().active_auction_asset, bid.lot_id, bid.amount, quantity)
+        await ws_manager.broadcast("bid_placed", {"lot_id": bid.lot_id, "amount": bid.amount, "user": user.username})
         return {"message": "Bid placed successfully"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/auction/bids")
-def get_live_bids(session: Session = Depends(get_session)):
+def get_live_bids(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
     state = sim.get_state()
     ticker = state.active_auction_asset
@@ -225,7 +332,7 @@ def get_live_bids(session: Session = Depends(get_session)):
     return sorted(bids, key=lambda x: x.amount, reverse=True)
 
 @app.post("/loans/offer")
-def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     borrower = session.exec(select(User).where(User.username == offer.borrower_username)).first()
     if not borrower: raise HTTPException(status_code=404, detail="User not found")
     if user.cash < offer.principal: raise HTTPException(status_code=400, detail="Insufficient funds")
@@ -239,10 +346,11 @@ def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_current_user), s
     )
     session.add(loan)
     session.commit()
+    await ws_manager.broadcast("market_update", {"action": "loan_offered", "from": user.username})
     return {"message": "Loan offer sent"}
 
 @app.post("/loans/accept/{loan_id}")
-def accept_loan(loan_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def accept_loan(loan_id: int, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     loan = session.get(TeamLoan, loan_id)
     if not loan or loan.borrower_id != user.id: raise HTTPException(status_code=404, detail="Loan not found")
     if loan.status != "pending": raise HTTPException(status_code=400, detail="Loan not pending")
@@ -260,7 +368,9 @@ def accept_loan(loan_id: int, user: User = Depends(get_current_user), session: S
     session.add(lender)
     session.add(user)
     session.add(loan)
+    session.add(loan)
     session.commit()
+    await ws_manager.broadcast("market_update", {"action": "loan_accepted", "loan_id": loan.id})
     return {"message": "Loan accepted"}
 
 @app.get("/loans/pending")
@@ -315,7 +425,7 @@ class RepaymentRequest(BaseModel):
     amount: float
 
 @app.post("/loans/repay")
-def repay_loan(req: RepaymentRequest, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def repay_loan(req: RepaymentRequest, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     """Make a partial or full repayment on a loan"""
     loan = session.get(TeamLoan, req.loan_id)
     if not loan or loan.borrower_id != user.id:
@@ -347,8 +457,10 @@ def repay_loan(req: RepaymentRequest, user: User = Depends(get_current_user), se
     session.add(user)
     session.add(lender)
     session.add(loan)
+    session.add(loan)
     session.commit()
     
+    await ws_manager.broadcast("market_update", {"action": "loan_repaid", "loan_id": loan.id})
     return {"message": message, "remaining_balance": loan.remaining_balance}
 
 # --- TRADING ---
@@ -359,25 +471,135 @@ class OrderCreate(BaseModel):
     quantity: int
     price: float
 
+    @field_validator('quantity')
+    @classmethod
+    def quantity_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Quantity must be positive')
+        return v
+
+    @field_validator('price')
+    @classmethod
+    def price_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Price must be positive')
+        return v
+
 @app.post("/orders")
-def place_order_endpoint(order: OrderCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def place_order_endpoint(order: OrderCreate, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
     # Map string to Enum
     otype = OrderType.BUY if order.type.lower() == "buy" else OrderType.SELL
     try:
         sim.place_order(user.id, order.asset_id, otype, order.quantity, order.price)
+        await ws_manager.broadcast("trade_executed", {"type": "order", "asset_id": order.asset_id, "user": user.username})
         return {"message": "Order placed"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+# --- T-BILL TREASURY (Direct Purchase) ---
 
+class TBillOrder(BaseModel):
+    quantity: int
+    
+    @field_validator('quantity')
+    @classmethod
+    def quantity_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Quantity must be positive')
+        return v
+
+@app.post("/treasury/buy")
+async def buy_tbills(order: TBillOrder, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
+    """Buy T-Bills at current face value (risk-free, no auction)"""
+    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="T-Bill asset not found")
+    
+    total_cost = asset.current_price * order.quantity
+    if user.cash < total_cost:
+        raise HTTPException(status_code=400, detail=f"Insufficient cash. Need ${total_cost:,.2f}, have ${user.cash:,.2f}")
+    
+    # Deduct cash
+    user.cash -= total_cost
+    
+    # Add to holdings
+    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
+    if holding:
+        holding.quantity += order.quantity
+    else:
+        holding = Holding(user_id=user.id, asset_id=asset.id, quantity=order.quantity)
+    
+    session.add(user)
+    session.add(holding)
+    session.commit()
+    
+    # Log activity
+    act_logger = ActivityLogger(session)
+    act_logger.log_action(user_id=user.id, action_type="TBILL_BUY", action_details={
+        "quantity": order.quantity, "price_per_unit": asset.current_price, "total_cost": total_cost
+    })
+    
+    await ws_manager.broadcast("trade_executed", {"type": "tbill_buy", "user": user.username, "quantity": order.quantity})
+    return {"message": f"Purchased {order.quantity} T-Bills at ${asset.current_price:.2f} each", "total_cost": total_cost}
+
+@app.post("/treasury/sell")
+async def sell_tbills(order: TBillOrder, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
+    """Sell T-Bills back at current face value"""
+    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="T-Bill asset not found")
+    
+    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
+    if not holding or holding.quantity < order.quantity:
+        raise HTTPException(status_code=400, detail="Insufficient T-Bill holdings")
+    
+    total_value = asset.current_price * order.quantity
+    
+    # Credit cash, deduct holdings
+    user.cash += total_value
+    holding.quantity -= order.quantity
+    
+    session.add(user)
+    session.add(holding)
+    session.commit()
+    
+    # Log activity
+    act_logger = ActivityLogger(session)
+    act_logger.log_action(user_id=user.id, action_type="TBILL_SELL", action_details={
+        "quantity": order.quantity, "price_per_unit": asset.current_price, "total_value": total_value
+    })
+    
+    await ws_manager.broadcast("trade_executed", {"type": "tbill_sell", "user": user.username, "quantity": order.quantity})
+    return {"message": f"Sold {order.quantity} T-Bills at ${asset.current_price:.2f} each", "total_value": total_value}
+
+@app.get("/treasury/info")
+def get_tbill_info(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Get T-Bill info including current price and user holdings"""
+    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="T-Bill asset not found")
+    
+    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
+    
+    return {
+        "asset_id": asset.id,
+        "ticker": "TBILL",
+        "name": asset.name,
+        "current_price": asset.current_price,
+        "base_price": asset.base_price,
+        "annual_yield": asset.base_cagr * 100,
+        "description": asset.description,
+        "user_holdings": holding.quantity if holding else 0,
+        "user_holdings_value": (holding.quantity * asset.current_price) if holding else 0.0
+    }
 
 # --- PRIVATE TRADING ---
 
 @app.post("/offers/create")
-def create_private_offer(
+async def create_private_offer(
     offer: PrivateOfferCreate, 
-    user: User = Depends(get_current_user), 
+    user: User = Depends(get_active_user), 
     session: Session = Depends(get_session)
 ):
     """Create a private buy/sell offer"""
@@ -421,22 +643,27 @@ def create_private_offer(
     # Create offer
     otype = OrderType.BUY if offer.offer_type.upper() == "BUY" else OrderType.SELL
     
-    new_offer = PrivateOffer(
-        from_user_id=user.id,
-        to_user_id=to_user_id,
-        asset_ticker=offer.asset_ticker,
-        offer_type=otype,
-        quantity=offer.quantity,
-        price_per_unit=offer.price_per_unit,
-        total_value=offer.quantity * offer.price_per_unit,
-        message=offer.message,
-        status=OfferStatus.PENDING
-    )
-    
-    session.add(new_offer)
-    session.commit()
-    
-    return {"message": "Offer created successfully", "offer_id": new_offer.id}
+    try:
+        new_offer = PrivateOffer(
+            from_user_id=user.id,
+            to_user_id=to_user_id,
+            asset_ticker=offer.asset_ticker,
+            offer_type=otype,
+            quantity=offer.quantity,
+            price_per_unit=offer.price_per_unit,
+            total_value=offer.quantity * offer.price_per_unit,
+            message=offer.message,
+            status=OfferStatus.PENDING
+        )
+        
+        session.add(new_offer)
+        session.commit()
+        
+        await ws_manager.broadcast("market_update", {"action": "offer_created", "from": user.username})
+        return {"message": "Offer created successfully", "offer_id": new_offer.id}
+    except Exception as e:
+        logger.error(f"Error creating private offer: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create offer")
 
 @app.get("/offers/my")
 def get_my_offers(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
@@ -461,7 +688,7 @@ def get_my_offers(user: User = Depends(get_current_user), session: Session = Dep
     }
 
 @app.post("/offers/{offer_id}/accept")
-def accept_offer(offer_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def accept_offer(offer_id: int, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     """Accept a pending offer"""
     # Check market open
     state = session.exec(select(MarketState)).first()
@@ -528,7 +755,7 @@ def accept_offer(offer_id: int, user: User = Depends(get_current_user), session:
     
     # Update Offer Status
     offer.status = OfferStatus.ACCEPTED
-    offer.responded_at = datetime.utcnow()
+    offer.responded_at = datetime.now(timezone.utc)
     
     # Create Transaction Record
     txn = Transaction(
@@ -550,10 +777,11 @@ def accept_offer(offer_id: int, user: User = Depends(get_current_user), session:
     
     session.commit()
     
+    await ws_manager.broadcast("trade_executed", {"type": "private_trade", "offer_id": offer.id, "buyer": buyer.username, "seller": seller.username})
     return {"message": "Offer accepted and trade executed", "transaction_id": txn.id}
 
 @app.post("/offers/{offer_id}/reject")
-def reject_offer(offer_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+async def reject_offer(offer_id: int, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     """Reject an offer sent to you"""
     offer = session.get(PrivateOffer, offer_id)
     if not offer:
@@ -566,14 +794,15 @@ def reject_offer(offer_id: int, user: User = Depends(get_current_user), session:
         raise HTTPException(status_code=400, detail="Offer not pending")
         
     offer.status = OfferStatus.REJECTED
-    offer.responded_at = datetime.utcnow()
+    offer.responded_at = datetime.now(timezone.utc)
     session.add(offer)
     session.commit()
     
+    await ws_manager.broadcast("market_update", {"action": "offer_rejected", "offer_id": offer.id})
     return {"message": "Offer rejected"}
 
 @app.get("/transactions")
-def get_transactions(session: Session = Depends(get_session)):
+def get_transactions(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get all public transactions for transparency"""
     txns = session.exec(select(Transaction).order_by(Transaction.timestamp.desc())).all()
     
@@ -608,27 +837,53 @@ def close_marketplace(user: User = Depends(get_current_admin), session: Session 
     return {"message": "Marketplace closed"}
 
 @app.post("/admin/next-turn")
-def next_turn(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+async def next_turn(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
+    logger = ActivityLogger(session)
     sim.step_simulation()
-    return {"message": "Advanced Year"}
+    state = sim.get_state()
+    logger.log_action(user_id=user.id, action_type="ADMIN_ADVANCE_YEAR", action_details={"new_year": state.current_year, "new_quarter": state.current_quarter})
+    await ws_manager.broadcast("market_update", {"action": "year_advanced", "year": state.current_year, "quarter": state.current_quarter})
+    return {"message": f"Advanced to Year {state.current_year}"}
+
+@app.post("/admin/next-quarter")
+async def next_quarter(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Advance simulation by one quarter"""
+    sim = MarketEngine(session)
+    logger = ActivityLogger(session)
+    sim.step_quarter()
+    state = sim.get_state()
+    logger.log_action(user_id=user.id, action_type="ADMIN_ADVANCE_QUARTER", action_details={"year": state.current_year, "quarter": state.current_quarter})
+    await ws_manager.broadcast("market_update", {"action": "quarter_advanced", "year": state.current_year, "quarter": state.current_quarter})
+    return {"message": f"Advanced to Year {state.current_year} Q{state.current_quarter}"}
 
 @app.post("/admin/trigger-shock")
-def trigger_shock(shock: ShockTrigger, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+async def trigger_shock(shock: ShockTrigger, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
+    logger = ActivityLogger(session)
     sim.trigger_shock(shock.type, shock.action)
+    logger.log_action(user_id=user.id, action_type="ADMIN_TRIGGER_SHOCK", action_details={"type": shock.type, "action": shock.action})
+    await ws_manager.broadcast("shock_triggered", {"type": shock.type, "action": shock.action})
     return {"message": f"Shock {shock.action} triggered for {shock.type}"}
 
 @app.post("/admin/auction/open/{ticker}")
-def open_auction(ticker: str, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+async def open_auction(ticker: str, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
+    logger = ActivityLogger(session)
+    if ticker == 'TBILL':
+        raise HTTPException(status_code=400, detail="US Treasury Bills are not auctioned. Players buy them directly.")
     sim.start_auction(ticker)
+    logger.log_action(user_id=user.id, action_type="ADMIN_OPEN_AUCTION", action_details={"ticker": ticker})
+    await ws_manager.broadcast("auction_update", {"action": "opened", "ticker": ticker})
     return {"message": f"Auction opened for {ticker}"}
 
 @app.post("/admin/auction/resolve")
-def resolve_auction_endpoint(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+async def resolve_auction_endpoint(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     sim = MarketEngine(session)
+    logger = ActivityLogger(session)
     msg = sim.resolve_auction()
+    logger.log_action(user_id=user.id, action_type="ADMIN_RESOLVE_AUCTION", action_details={"result": msg})
+    await ws_manager.broadcast("auction_update", {"action": "resolved", "result": msg})
     return {"message": msg}
 
 @app.post("/admin/reset-prices")
@@ -649,71 +904,10 @@ def reset_asset_prices(user: User = Depends(get_current_admin), session: Session
 
 # --- CONSENT & ONBOARDING ---
 
-@app.get("/consent/status")
-def check_consent_status(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    """Check if user has consented to research participation"""
-    consent = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
-    team_info = session.exec(select(TeamLeaderInfo).where(TeamLeaderInfo.user_id == user.id)).first()
-    
-    return {
-        "has_consented": user.has_consented,
-        "consent_record": consent,
-        "team_info": team_info
-    }
 
-@app.post("/consent/accept")
-def accept_consent(
-    consent_data: ConsentAccept,
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
-):
-    """Accept research consent and provide team leader information"""
-    # Check if already consented
-    existing = session.exec(select(ConsentRecord).where(ConsentRecord.user_id == user.id)).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Already consented")
-    
-    # Create consent record
-    consent = ConsentRecord(
-        user_id=user.id,
-        consent_text_version="v1.0"
-    )
-    session.add(consent)
-    
-    # Create team leader info
-    team_info = TeamLeaderInfo(
-        user_id=user.id,
-        leader_name=consent_data.leader_name,
-        email=consent_data.email,
-        age=consent_data.age,
-        team_size=consent_data.team_size
-    )
-    session.add(team_info)
-    
-    # Update user
-    user.has_consented = True
-    session.add(user)
-    
-    session.commit()
-    
-    # Log the consent
-    logger = ActivityLogger(session)
-    logger.log_action(
-        user_id=user.id,
-        action_type="CONSENT_ACCEPTED",
-        action_details={
-            "leader_name": consent_data.leader_name,
-            "team_size": consent_data.team_size
-        }
-    )
-    
-    return {"message": "Consent recorded successfully"}
-
-
-# --- MULTI-LOT AUCTION ENDPOINTS ---
 
 @app.get("/auction/lots")
-def get_auction_lots(session: Session = Depends(get_session)):
+def get_auction_lots(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get all lots for the active auction"""
     state = session.exec(select(MarketState)).first()
     if not state or not state.active_auction_asset:
@@ -748,7 +942,7 @@ def get_auction_lots(session: Session = Depends(get_session)):
     return result
 
 @app.get("/auction/bids/{lot_id}")
-def get_lot_bids(lot_id: int, session: Session = Depends(get_session)):
+def get_lot_bids(lot_id: int, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get all bids for a specific lot"""
     bids = session.exec(
         select(AuctionBid).where(AuctionBid.lot_id == lot_id)
@@ -825,7 +1019,7 @@ def update_admin_credentials(
 # --- NEWS SYSTEM ---
 
 @app.get("/news")
-def get_news(session: Session = Depends(get_session)):
+def get_news(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get all published news"""
     news = session.exec(select(NewsItem).where(NewsItem.is_published == True).order_by(NewsItem.published_at.desc())).all()
     return news
@@ -842,17 +1036,21 @@ def create_news(
     user: User = Depends(get_current_admin),
     session: Session = Depends(get_session)
 ):
-    item = NewsItem(
-        title=news.title,
-        content=news.content,
-        is_published=news.is_published,
-        image_url=news.image_url,
-        source=news.source,
-        published_at=datetime.utcnow()
-    )
-    session.add(item)
-    session.commit()
-    return {"message": "News item created", "id": item.id}
+    try:
+        item = NewsItem(
+            title=news.title,
+            content=news.content,
+            is_published=news.is_published,
+            image_url=news.image_url,
+            source=news.source,
+            published_at=datetime.now(timezone.utc)
+        )
+        session.add(item)
+        session.commit()
+        return {"message": "News item created", "id": item.id}
+    except Exception as e:
+        print(f"Error creating news: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create news: {str(e)}")
 
 @app.put("/admin/news/{news_id}")
 def update_news(
@@ -963,8 +1161,7 @@ def change_team_password(
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     
     # Validate new password
-    if len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+    validate_password_strength(new_password)
     
     # Update password
     user.hashed_password = get_password_hash(new_password)
@@ -980,27 +1177,33 @@ def get_login_status(
     session: Session = Depends(get_session)
 ):
     """Get login status of all team users"""
-    from datetime import datetime, timedelta
-    
     teams = session.exec(select(User).where(User.role == Role.TEAM)).all()
     
     result = []
+    now = datetime.now(timezone.utc)
+    
     for team in teams:
-        # Consider online if logged in within last 5 minutes
+        # Consider online if last_seen within last 2 minutes
         is_online = False
-        if team.last_login:
-            time_since_login = datetime.utcnow() - team.last_login
-            is_online = time_since_login < timedelta(minutes=5)
+        if team.last_seen:
+            # Ensure timezone awareness
+            last_seen_aware = team.last_seen
+            if last_seen_aware.tzinfo is None:
+                last_seen_aware = last_seen_aware.replace(tzinfo=timezone.utc)
+                
+            time_since_seen = now - last_seen_aware
+            is_online = time_since_seen.total_seconds() < 120 # 2 minutes
         
         result.append({
             "id": team.id,
             "username": team.username,
             "is_online": is_online,
-            "last_login": team.last_login.isoformat() if team.last_login else None,
+            "last_login": team.last_login,
+            "last_seen": team.last_seen,
             "is_frozen": team.is_frozen,
             "has_consented": team.has_consented
         })
-    
+        
     return result
 
 

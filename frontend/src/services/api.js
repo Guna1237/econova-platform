@@ -39,11 +39,8 @@ export const login = async (username, password) => {
 };
 
 export const register = async (username, password) => {
-    // Using simple register endpoint
-    const params = new URLSearchParams();
-    params.append('username', username);
-    params.append('password', password);
-    const response = await default_api.post(`/register-simple?username=${username}&password=${password}`, {});
+    // Using simple register endpoint with body
+    const response = await default_api.post('/register-simple', { username, password });
     return response.data;
 };
 
@@ -71,8 +68,8 @@ export const logout = () => {
     localStorage.removeItem('token');
 };
 
-export const getPriceHistory = async (assetId) => {
-    const response = await default_api.get(`/market/history/${assetId}`);
+export const getPriceHistory = async (assetId, quarterly = false) => {
+    const response = await default_api.get(`/market/history/${assetId}?quarterly=${quarterly}`);
     return response.data;
 };
 
@@ -83,10 +80,7 @@ export const getAdminUsers = async () => {
 };
 
 export const createTeamUser = async (username, password) => {
-    const params = new URLSearchParams();
-    params.append('username', username);
-    params.append('password', password);
-    const response = await default_api.post(`/admin/users/create?username=${username}&password=${password}`, {});
+    const response = await default_api.post('/admin/users/create', { username, password });
     return response.data;
 };
 
@@ -154,6 +148,11 @@ export const nextTurn = async () => {
     return response.data;
 };
 
+export const nextQuarter = async () => {
+    const response = await default_api.post('/admin/next-quarter');
+    return response.data;
+};
+
 export const resolveAuction = async () => {
     const response = await default_api.post(`/admin/auction/resolve`);
     return response.data;
@@ -201,6 +200,22 @@ export const getLotBids = async (lotId) => {
 
 export const placeLotBid = async (lotId, amount) => {
     const response = await default_api.post('/auction/bid', { lot_id: lotId, amount });
+    return response.data;
+};
+
+// --- TREASURY (T-Bills) ---
+export const getTreasuryInfo = async () => {
+    const response = await default_api.get('/treasury/info');
+    return response.data;
+};
+
+export const buyTBills = async (quantity) => {
+    const response = await default_api.post('/treasury/buy', { quantity });
+    return response.data;
+};
+
+export const sellTBills = async (quantity) => {
+    const response = await default_api.post('/treasury/sell', { quantity });
     return response.data;
 };
 
@@ -319,3 +334,63 @@ export const deleteNews = async (id) => {
 
 export default default_api;
 
+// --- WebSocket Connection ---
+export const connectWebSocket = (onMessage) => {
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
+    const wsUrl = `${wsProtocol}//${wsHost}/ws`;
+
+    let ws = null;
+    let reconnectTimer = null;
+    let pingInterval = null;
+
+    const connect = () => {
+        try {
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('[WS] Connected');
+                // Send ping every 30s to keep alive
+                pingInterval = setInterval(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send('ping');
+                    }
+                }, 30000);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type !== 'pong') {
+                        onMessage(data);
+                    }
+                } catch (e) {
+                    console.warn('[WS] Failed to parse:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('[WS] Disconnected, reconnecting in 3s...');
+                clearInterval(pingInterval);
+                reconnectTimer = setTimeout(connect, 3000);
+            };
+
+            ws.onerror = (err) => {
+                console.warn('[WS] Error:', err);
+                ws.close();
+            };
+        } catch (e) {
+            console.warn('[WS] Connection failed:', e);
+            reconnectTimer = setTimeout(connect, 3000);
+        }
+    };
+
+    connect();
+
+    // Return cleanup function
+    return () => {
+        clearTimeout(reconnectTimer);
+        clearInterval(pingInterval);
+        if (ws) ws.close();
+    };
+};

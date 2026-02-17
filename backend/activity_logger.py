@@ -3,7 +3,7 @@ Activity Logger Service for Research Data Collection
 
 Tracks all user actions, decisions, and behavioral patterns with comprehensive context.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 from sqlmodel import Session
 from .models import ActivityLog, User, MarketState, Asset
@@ -44,7 +44,7 @@ class ActivityLogger:
             user_id=user_id,
             action_type=action_type,
             action_details=action_details,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             duration_ms=duration_ms,
             context_data=context_data,
             session_id=session_id

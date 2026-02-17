@@ -1,6 +1,6 @@
 import math
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select, func
 from .models import Asset, MarketState, Order, OrderStatus, OrderType, User, Holding, TeamLoan, LoanStatus, AuctionBid, PriceHistory, Role, AuctionLot, LotStatus, ActiveEvent, NewsItem
 
@@ -72,10 +72,10 @@ class NewsCaster:
             ("New zoning laws restrict commercially viable land.", 0.05, 5),
             ("Construction material costs skyrocket.", -0.06, 2),
         ],
-        "BOND": [
-            ("Credit rating agency upgrades sovereign debt outlook.", 0.03, 3),
-            ("Inflation fears drive bond sell-off.", -0.04, 1),
-             ("Flight to safety increases demand for bonds.", 0.05, 1),
+        "TBILL": [
+            ("US Treasury yield curve shifts on Fed policy signal.", 0.005, 3),
+            ("Treasury auction sees strong demand from institutional buyers.", 0.003, 2),
+            ("Fiscal stimulus bill raises Treasury issuance outlook.", -0.003, 2),
         ]
     }
 
@@ -86,49 +86,57 @@ class MarketEngine:
     def initialize_assets(self):
         if not self.session.exec(select(Asset)).first():
             assets = [
-                Asset(name="Gold Reserves", ticker="GOLD", base_price=5000.0, current_price=5000.0, volatility=0.05, macro_sensitivity=-0.8, base_cagr=0.03, description="Safe haven."),
-                Asset(name="Tech Growth ETF", ticker="TECH", base_price=1000.0, current_price=1000.0, volatility=0.25, macro_sensitivity=2.0, base_cagr=0.15, description="High growth, high risk."),
-                Asset(name="Crude Oil", ticker="OIL", base_price=80.0, current_price=80.0, volatility=0.15, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy."),
-                Asset(name="Real Estate", ticker="REAL", base_price=2500.0, current_price=2500.0, volatility=0.03, macro_sensitivity=0.4, base_cagr=0.06, description="Stable growth."),
-                Asset(name="Govt Bonds", ticker="BOND", base_price=100.0, current_price=100.0, volatility=0.01, macro_sensitivity=-0.2, base_cagr=0.05, description="Steady yield.")
+                Asset(name="Gold Reserves", ticker="GOLD", base_price=5000.0, current_price=5000.0, volatility=0.15, macro_sensitivity=-0.8, base_cagr=0.03, description="Safe haven asset. Inversely correlated to market risk."),
+                Asset(name="Tech Growth ETF", ticker="TECH", base_price=1000.0, current_price=1000.0, volatility=0.40, macro_sensitivity=2.5, base_cagr=0.15, description="High growth, high risk technology sector."),
+                Asset(name="Crude Oil", ticker="OIL", base_price=80.0, current_price=80.0, volatility=0.30, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy commodity."),
+                Asset(name="Real Estate", ticker="REAL", base_price=2500.0, current_price=2500.0, volatility=0.10, macro_sensitivity=0.4, base_cagr=0.06, description="Stable growth real estate index."),
+                Asset(name="US Treasury Bills", ticker="TBILL", base_price=100.0, current_price=100.0, volatility=0.0, macro_sensitivity=0.0, base_cagr=0.03, description="Risk-free government securities. Guaranteed low yield (~3%/yr).")
             ]
             self.session.add_all(assets)
-            state = MarketState(current_year=2024, phase="PRE_GAME", news_feed="Welcome to Econova Enterprise.")
+            state = MarketState(current_year=0, current_quarter=1, phase="PRE_GAME", news_feed="Welcome to Econova Enterprise.")
             self.session.add(state)
             self.session.commit()
             
             # Seed Initial History
             for asset in assets:
                  self.session.refresh(asset)
-                 self.session.add(PriceHistory(asset_id=asset.id, year=2024, price=asset.current_price))
+                 self.session.add(PriceHistory(asset_id=asset.id, year=0, quarter=0, price=asset.current_price))
             self.session.commit()
 
     def get_state(self) -> MarketState:
         return self.session.exec(select(MarketState)).first()
 
     # --- SIMULATION LOGIC ---
-    def step_simulation(self):
+    def step_quarter(self):
+        """Advance simulation by one quarter (1/4 year)"""
         state = self.get_state()
         if state.phase == "FINISHED": return
         
-        next_year = state.current_year + 1
+        current_year = state.current_year
+        current_q = state.current_quarter
         
-        # --- MICRO EVENTS GENERATION ---
-        # 10% chance per asset to trigger a new event if not in a crash
-        if state.shock_stage == 'NONE' or state.shock_stage == 'RECOVERY':
+        # Calculate next quarter/year
+        if current_q >= 4:
+            next_year = current_year + 1
+            next_q = 1
+        else:
+            next_year = current_year
+            next_q = current_q + 1
+        
+        quarter_scale = 0.25  # Scale annual effects to quarterly
+        
+        # --- MICRO EVENTS GENERATION (only at Q1 of each year) ---
+        if next_q == 1 and (state.shock_stage == 'NONE' or state.shock_stage == 'RECOVERY'):
             assets = self.session.exec(select(Asset)).all()
             for asset in assets:
-                 # Check if already has an event
+                if asset.ticker == 'TBILL': continue  # No events for T-Bills
                 existing = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
-                if len(existing) >= 1: continue # Max 1 event at a time per asset
-
-                if random.random() < 0.15: # 15% chance
+                if len(existing) >= 1: continue
+                if random.random() < 0.15:
                     templates = NewsCaster.MICRO_TEMPLATES.get(asset.ticker, [])
                     if templates:
                         desc, impact, duration = random.choice(templates)
-                        # Add some randomness to impact
-                        final_impact = impact * (0.8 + random.random() * 0.4) 
-                        
+                        final_impact = impact * (0.8 + random.random() * 0.4)
                         event = ActiveEvent(
                             asset_ticker=asset.ticker,
                             description=desc,
@@ -138,120 +146,105 @@ class MarketEngine:
                             remaining_years=duration
                         )
                         self.session.add(event)
-                        
-                        # Post News
                         news = NewsItem(
                             title=f"Market Update: {asset.name}",
                             content=f"{desc} Analysts project an annual impact of {final_impact*100:.1f}% on {asset.ticker}.",
                             is_published=True,
                             source="Bloomberg Terminal",
-                            published_at=datetime.utcnow()
+                            published_at=datetime.now(timezone.utc)
                         )
                         self.session.add(news)
 
-        # Check for recovery timing (3-4 years after shock)
+        # Check for recovery timing
         if state.shock_stage == 'CRASH' and state.last_shock_year:
             years_since_shock = next_year - state.last_shock_year
-            if years_since_shock >= 3: # Trigger recovery after 3 years
+            if years_since_shock >= 3 and next_q == 1:
                 state.shock_stage = 'RECOVERY'
                 state.news_feed = NewsCaster.get_headline(state.shock_type, 'RECOVERY')
 
         # 1. Update Asset Prices
         assets = self.session.exec(select(Asset)).all()
         for asset in assets:
+            # --- US Treasury Bills: guaranteed, risk-free yield ---
+            if asset.ticker == 'TBILL':
+                quarterly_yield = asset.base_cagr * quarter_scale
+                new_price = asset.current_price * (1 + quarterly_yield)
+                self.session.add(PriceHistory(asset_id=asset.id, year=next_year, quarter=next_q, price=new_price))
+                asset.current_price = new_price
+                self.session.add(asset)
+                continue
+            
             shock_factor = 0.0
             
-            # Shock Logic - REBALANCED
+            # Shock Logic
             if state.shock_stage == 'WARNING':
-                # Small positive boost during warning to prevent pre-crash collapse
-                shock_factor = 0.01
+                shock_factor = 0.01 * quarter_scale
             elif state.shock_stage == 'CRASH':
                 beta = asset.macro_sensitivity
                 if state.shock_type == 'INFLATION':
-                    if asset.ticker == 'GOLD': 
-                        shock_factor = 0.12  # Moderate gain
-                    elif asset.ticker == 'TECH': 
-                        shock_factor = -0.15  # Reduced from -0.25
-                    elif asset.ticker == 'BOND':
-                        shock_factor = -0.08  # Bonds suffer in inflation
-                    else: 
-                        shock_factor = -0.10 * abs(beta)  # Reduced impact
+                    if asset.ticker == 'GOLD': shock_factor = 0.12 * quarter_scale
+                    elif asset.ticker == 'TECH': shock_factor = -0.15 * quarter_scale
+                    else: shock_factor = -0.10 * abs(beta) * quarter_scale
                 elif state.shock_type == 'RECESSION':
-                    if asset.ticker == 'BOND': 
-                        shock_factor = 0.10  # Moderate gain
-                    elif asset.ticker in ['OIL', 'REAL']: 
-                        shock_factor = -0.15  # Reduced from -0.20
-                    elif asset.ticker == 'GOLD':
-                        shock_factor = 0.05  # Safe haven
-                    else: 
-                        shock_factor = -0.12 * abs(beta)
+                    if asset.ticker in ['OIL', 'REAL']: shock_factor = -0.15 * quarter_scale
+                    elif asset.ticker == 'GOLD': shock_factor = 0.05 * quarter_scale
+                    else: shock_factor = -0.12 * abs(beta) * quarter_scale
                 else:
-                    shock_factor = -0.10 * abs(beta)
+                    shock_factor = -0.10 * abs(beta) * quarter_scale
             elif state.shock_stage == 'RECOVERY':
-                # Strong recovery boost
-                shock_factor = 0.15 + (random.random() * 0.10) # 15-25% boost
+                shock_factor = (0.15 + (random.random() * 0.10)) * quarter_scale
 
-            # ENHANCED Mean Reversion - Pull towards base price
-            # Calculate deviation ratio (e.g., 0.5 means price is 50% of base)
+            # Mean Reversion
             price_ratio = asset.current_price / asset.base_price
-            
-            # k is the mean reversion speed
             k_reversion = 0.0
-            
-            if price_ratio < 0.5: # Extremely undervalued
-                k_reversion = 0.15 # Reduced from 0.20
-            elif price_ratio < 0.8: # Undervalued
-                k_reversion = 0.08 # Reduced from 0.10
-            elif price_ratio > 2.0: # Extremely overvalued
-                k_reversion = -0.10 # Reduced from -0.15
-            elif price_ratio > 1.5: # Overvalued
-                k_reversion = -0.05 # Reduced from -0.08
+            if price_ratio < 0.5: k_reversion = 0.15 * quarter_scale
+            elif price_ratio < 0.8: k_reversion = 0.08 * quarter_scale
+            elif price_ratio > 2.0: k_reversion = -0.10 * quarter_scale
+            elif price_ratio > 1.5: k_reversion = -0.05 * quarter_scale
                 
             # Micro Event Impact
             micro_impact = 0.0
             active_events = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
             for event in active_events:
-                micro_impact += event.annual_impact
-                event.remaining_years -= 1
-                if event.remaining_years <= 0:
-                    self.session.delete(event)
-                else:
-                    self.session.add(event)
+                micro_impact += event.annual_impact * quarter_scale
+                if next_q == 4:  # Tick down events at year-end
+                    event.remaining_years -= 1
+                    if event.remaining_years <= 0:
+                        self.session.delete(event)
+                    else:
+                        self.session.add(event)
 
             # Calculation
-            # Increased noise factor from 0.15 to 0.3 for more "real life" volatility
-            noise = random.gauss(0, asset.volatility * 0.3)
+            # Calculation - Increased noise for inefficiency
+            noise = random.gauss(0, asset.volatility * 1.5 * math.sqrt(quarter_scale))
+            if random.random() < 0.10: # 10% chance of extra random swing
+                noise += random.choice([-0.05, 0.05])
+            growth = (asset.base_cagr * quarter_scale) + shock_factor + k_reversion + micro_impact + noise
             
-            # Calculate total growth
-            growth = asset.base_cagr + shock_factor + k_reversion + micro_impact + noise
+            # Cap single-quarter changes
+            growth = max(min(growth, 0.25), -0.20)
             
-            # Cap single-year changes for stability
-            growth = max(min(growth, 0.50), -0.40)  # Max +50% / -40% per year
-            
-            # Calculate new price
             new_price = asset.current_price * (1 + growth)
-            
-            # Apply bounds: 20% floor, 300% ceiling
-            min_price = asset.base_price * 0.20  # Raised from 0.10
-            max_price = asset.base_price * 3.00  # New ceiling
+            min_price = asset.base_price * 0.20
+            max_price = asset.base_price * 3.00
             new_price = max(min_price, min(max_price, new_price))
             
-            # Record History
-            self.session.add(PriceHistory(asset_id=asset.id, year=next_year, price=new_price))
+            # Record quarterly history
+            self.session.add(PriceHistory(asset_id=asset.id, year=next_year, quarter=next_q, price=new_price))
             
             asset.current_price = new_price
             self.session.add(asset)
             
-        # 2. Process Credit (Interest)
+        # 2. Process Credit (Interest) — quarterly accrual
         loans = self.session.exec(select(TeamLoan).where(TeamLoan.status == LoanStatus.ACTIVE)).all()
         for loan in loans:
             borrower = self.session.get(User, loan.borrower_id)
             lender = self.session.get(User, loan.lender_id)
             
-            interest = loan.principal * (loan.interest_rate / 100.0)
+            interest = loan.principal * (loan.interest_rate / 100.0) * quarter_scale
             
             if borrower.cash < interest:
-                borrower.is_frozen = True # Bankruptcy
+                borrower.is_frozen = True
                 loan.status = LoanStatus.DEFAULTED
                 state.news_feed = f"BANKRUPTCY ALERT: {borrower.username} defaulted!"
                 self.session.add(borrower)
@@ -263,8 +256,14 @@ class MarketEngine:
                 self.session.add(lender)
 
         state.current_year = next_year
+        state.current_quarter = next_q
         self.session.add(state)
         self.session.commit()
+
+    def step_simulation(self):
+        """Advance simulation by one full year (4 quarters)"""
+        for _ in range(4):
+            self.step_quarter()
 
     def trigger_shock(self, type_: str, action: str):
         state = self.get_state()
@@ -283,11 +282,11 @@ class MarketEngine:
     
     # Lot configurations: {ticker: [(quantity, base_price_multiplier), ...]}
     LOT_CONFIGS = {
-        'GOLD': [(10, 1.0), (15, 1.0), (20, 1.0)],  # tonnes
-        'TECH': [(50, 1.0), (75, 1.0), (100, 1.0)],  # shares
-        'OIL': [(100, 1.0), (150, 1.0), (200, 1.0)],  # barrels
-        'REAL': [(5, 1.0), (10, 1.0)],  # properties
-        'BOND': [(100, 1.0), (200, 1.0), (300, 1.0)]  # units
+        'GOLD': [(10, 1.0), (15, 1.0), (20, 1.0)],
+        'TECH': [(50, 1.0), (75, 1.0), (100, 1.0)],
+        'OIL': [(100, 1.0), (150, 1.0), (200, 1.0)],
+        'REAL': [(5, 1.0), (10, 1.0)],
+        # TBILL is NOT auctioned — players buy at face value
     }
     
     def create_auction_lots(self, ticker: str):

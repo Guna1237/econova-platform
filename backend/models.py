@@ -1,7 +1,7 @@
 from typing import Optional, List
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 class Role(str, Enum):
     ADMIN = "admin"
@@ -62,7 +62,7 @@ class Holding(SQLModel, table=True):
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(index=True, unique=True)
-    hashed_password: str
+    hashed_password: str = Field(exclude=True)
     role: Role = Role.TEAM
     
     cash: float = Field(default=1000000.0)
@@ -74,6 +74,8 @@ class User(SQLModel, table=True):
     
     # Login tracking
     last_login: Optional[datetime] = Field(default=None)
+    last_seen: Optional[datetime] = Field(default=None)
+    session_id: Optional[str] = Field(default=None)
 
 class TeamLoan(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -84,7 +86,7 @@ class TeamLoan(SQLModel, table=True):
     total_repaid: float = Field(default=0.0)  # Tracks total amount repaid
     interest_rate: float # Percentage per year
     status: LoanStatus = LoanStatus.PENDING
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AuctionBid(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -94,7 +96,7 @@ class AuctionBid(SQLModel, table=True):
     amount: float # Per unit
     quantity: int
     status: str = "active"
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Order(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -104,11 +106,12 @@ class Order(SQLModel, table=True):
     price: float
     quantity: int
     status: OrderStatus = OrderStatus.OPEN
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class MarketState(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    current_year: int = Field(default=2024)
+    current_year: int = Field(default=0)
+    current_quarter: int = Field(default=1)  # 1-4
     phase: str = Field(default="PRE_GAME") # PRE_GAME, AUCTION, TRADING, FINISHED
     
     # Marketplace Control
@@ -126,6 +129,7 @@ class PriceHistory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     asset_id: int = Field(foreign_key="asset.id")
     year: int
+    quarter: int = Field(default=0)  # 0 = annual snapshot, 1-4 = quarterly
     price: float
 
 # ============ NEW MODELS FOR RESEARCH TRACKING ============
@@ -134,7 +138,7 @@ class ConsentRecord(SQLModel, table=True):
     """Track user consent for research participation"""
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", unique=True)
-    consented_at: datetime = Field(default_factory=datetime.utcnow)
+    consented_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     ip_address: Optional[str] = None
     consent_text_version: str = Field(default="v1.0")
 
@@ -146,7 +150,7 @@ class TeamLeaderInfo(SQLModel, table=True):
     email: str
     age: int
     team_size: int = Field(default=1)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class ActivityLog(SQLModel, table=True):
     """Comprehensive tracking of all user actions for behavioral research"""
@@ -154,7 +158,7 @@ class ActivityLog(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
     action_type: str = Field(index=True)  # BID, TRADE, LOAN_OFFER, VIEW_PORTFOLIO, etc.
     action_details: dict = Field(default={}, sa_column=Column(JSON))
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
     duration_ms: Optional[int] = None  # Time spent on decision
     context_data: dict = Field(default={}, sa_column=Column(JSON))  # Market state, portfolio value, etc.
     session_id: Optional[str] = None
@@ -169,14 +173,14 @@ class AuctionLot(SQLModel, table=True):
     status: LotStatus = Field(default=LotStatus.PENDING)
     winner_id: Optional[int] = Field(default=None, foreign_key="user.id")
     winning_bid: Optional[float] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AdminCredentials(SQLModel, table=True):
     """Secure admin credential management with audit trail"""
     id: Optional[int] = Field(default=None, primary_key=True)
     username: str = Field(unique=True)
-    hashed_password: str
-    last_changed: datetime = Field(default_factory=datetime.utcnow)
+    hashed_password: str = Field(exclude=True)
+    last_changed: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     changed_by: Optional[str] = None  # Username of who made the change
 
 class PrivateOffer(SQLModel, table=True):
@@ -191,7 +195,7 @@ class PrivateOffer(SQLModel, table=True):
     total_value: float
     status: OfferStatus = Field(default=OfferStatus.PENDING)
     message: Optional[str] = None  # Optional message from offerer
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
     expires_at: Optional[datetime] = None
     responded_at: Optional[datetime] = None
 
@@ -204,13 +208,13 @@ class Transaction(SQLModel, table=True):
     quantity: int
     price_per_unit: float
     total_value: float
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 class NewsItem(SQLModel, table=True):
     """News articles for the platform"""
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str
     content: str
-    published_at: datetime = Field(default_factory=datetime.utcnow)
+    published_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     is_published: bool = Field(default=False)
     image_url: Optional[str] = None
     source: str = Field(default="Global News Network")

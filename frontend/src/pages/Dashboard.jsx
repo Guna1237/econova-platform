@@ -5,9 +5,9 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
-    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark
+    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectWebSocket } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -22,6 +22,7 @@ import TeamManagement from '../components/TeamManagement';
 import DataExport from '../components/DataExport';
 import PrivateTrading from '../components/PrivateTrading';
 import NewsTab from '../components/NewsTab';
+import Treasury from '../components/Treasury';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -117,8 +118,21 @@ export default function Dashboard() {
 
     useEffect(() => {
         fetchData();
-        const interval = setInterval(fetchData, 2000); // Faster polling (2s)
-        return () => clearInterval(interval);
+        // Polling as fallback (slower since we have WebSocket)
+        const interval = setInterval(fetchData, 10000);
+
+        // WebSocket for instant real-time updates
+        const cleanupWs = connectWebSocket((msg) => {
+            console.log('[WS] Event:', msg.type);
+            if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed'].includes(msg.type)) {
+                fetchData();
+            }
+        });
+
+        return () => {
+            clearInterval(interval);
+            cleanupWs();
+        };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const handleLogout = () => {
@@ -133,7 +147,7 @@ export default function Dashboard() {
             toast.success(`Team ${newTeam.username} Created`);
             setNewTeam({ username: '', password: '' });
             fetchData();
-        } catch (e) { toast.error("Failed to create team"); }
+        } catch (e) { toast.error(e?.response?.data?.detail || "Failed to create team"); }
     };
 
     const handleFreeze = async (userId) => {
@@ -163,11 +177,22 @@ export default function Dashboard() {
     };
 
     const handleNextTurn = async () => {
-        const loadId = toast.loading("Advancing market year...");
+        const loadId = toast.loading("Advancing full year (4 quarters)...");
         try {
-            await nextTurn();
+            const result = await nextTurn();
             await fetchData();
-            toast.success("Year Advanced", { id: loadId });
+            toast.success(result.message || "Year Advanced", { id: loadId });
+        } catch (err) {
+            toast.error('Simulation error', { id: loadId });
+        }
+    };
+
+    const handleNextQuarter = async () => {
+        const loadId = toast.loading("Advancing quarter...");
+        try {
+            const result = await nextQuarter();
+            await fetchData();
+            toast.success(result.message || "Quarter Advanced", { id: loadId });
         } catch (err) {
             toast.error('Simulation error', { id: loadId });
         }
@@ -203,6 +228,7 @@ export default function Dashboard() {
         { id: 'news', label: 'NEWS', icon: Play },
         { id: 'marketplace', label: 'MARKETPLACE', icon: TrendingUp },
         { id: 'auction', label: 'AUCTION HALL', icon: Gavel },
+        { id: 'treasury', label: 'TREASURY', icon: Shield },
         { id: 'credit', label: 'CREDIT NETWORK', icon: Landmark },
         { id: 'analysis', label: 'ANALYSIS', icon: Activity },
     ];
@@ -249,7 +275,7 @@ export default function Dashboard() {
                 {/* Status/Clock Area & Club Logo */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <div className="mono-num" style={{ fontSize: '0.9rem', fontWeight: 700 }}>
-                        YEAR {marketState?.current_year || '----'}
+                        YEAR {marketState?.current_year ?? '---'}{marketState?.current_quarter ? ` Q${marketState.current_quarter}` : ''}
                     </div>
                     {user?.role === 'admin' && (
                         <div style={{ border: '1px solid #D1202F', padding: '0.1rem 0.4rem', color: '#D1202F', fontSize: '0.7rem', fontWeight: 700 }}>ADMIN</div>
@@ -382,6 +408,7 @@ export default function Dashboard() {
                                     <div style={{ display: 'flex', gap: '1rem' }}>
                                         <button onClick={() => handleShock('INFLATION', 'CRASH')} style={{ background: '#D1202F', color: 'white', border: 'none', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>TRIG. INFLATION</button>
                                         <button onClick={() => handleShock('RECESSION', 'CRASH')} style={{ background: '#D1202F', color: 'white', border: 'none', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>TRIG. RECESSION</button>
+                                        <button onClick={handleNextQuarter} style={{ border: '2px solid #D1202F', background: 'transparent', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem', color: '#D1202F' }}>ADVANCE Q</button>
                                         <button onClick={handleNextTurn} style={{ border: '2px solid #000', background: 'transparent', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>ADVANCE YEAR</button>
                                     </div>
                                 </div>
@@ -438,7 +465,8 @@ export default function Dashboard() {
                                                 <div style={{ marginTop: '2rem' }}>
                                                     <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Global Controls</h2>
                                                     <div className="fintech-card">
-                                                        <button onClick={handleNextTurn} className="btn" style={{ width: '100%', background: '#000', color: '#FFF', marginBottom: '1rem' }}>ADVANCE FISCAL YEAR</button>
+                                                        <button onClick={handleNextTurn} className="btn" style={{ width: '100%', background: '#000', color: '#FFF', marginBottom: '0.75rem' }}>ADVANCE FISCAL YEAR</button>
+                                                        <button onClick={handleNextQuarter} className="btn" style={{ width: '100%', background: '#FFF', color: '#D1202F', border: '2px solid #D1202F', marginBottom: '1rem', fontWeight: 700 }}>ADVANCE QUARTER</button>
                                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                                             <button onClick={() => handleShock('INFLATION', 'HINT')} className="btn btn-secondary">HINT INFLATION</button>
                                                             <button onClick={() => handleShock('RECESSION', 'HINT')} className="btn btn-secondary">HINT RECESSION</button>
@@ -569,12 +597,12 @@ export default function Dashboard() {
                                     <AuctionHouse user={user} marketState={marketState} onUpdate={fetchData} />
                                 )}
 
-                                {activeTab === 'credit' && (
-                                    <CreditNetwork user={user} />
+                                {activeTab === 'treasury' && (
+                                    <Treasury user={user} onUpdate={fetchData} />
                                 )}
 
-                                {activeTab === 'news' && (
-                                    <NewsTab user={user} />
+                                {activeTab === 'credit' && (
+                                    <CreditNetwork user={user} />
                                 )}
 
                                 {activeTab === 'news' && (

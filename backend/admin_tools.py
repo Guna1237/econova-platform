@@ -4,7 +4,7 @@ Admin Tools for Platform Management
 Provides price manipulation, credential management, and data export functionality.
 """
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 from .models import Asset, AdminCredentials, User, ActivityLog, TeamLeaderInfo, ConsentRecord
 from .auth import get_password_hash
@@ -70,7 +70,7 @@ class AdminTools:
             "change_pct": ((new_price - old_price) / old_price) * 100,
             "change_abs": new_price - old_price,
             "adjusted_by": admin_username,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
     def change_admin_credentials(
@@ -113,7 +113,7 @@ class AdminTools:
         if new_password:
             admin_cred.hashed_password = get_password_hash(new_password)
         
-        admin_cred.last_changed = datetime.utcnow()
+        admin_cred.last_changed = datetime.now(timezone.utc)
         admin_cred.changed_by = current_admin_username
         
         self.session.add(admin_cred)
@@ -169,7 +169,7 @@ class AdminTools:
         # Header
         writer.writerow([
             'log_id', 'user_id', 'username', 'action_type', 'timestamp',
-            'duration_ms', 'action_details', 'market_year', 'market_phase',
+            'duration_ms', 'action_details', 'has_consented', 'market_year', 'market_phase',
             'shock_stage', 'shock_type', 'user_cash', 'user_debt'
         ])
         
@@ -177,6 +177,12 @@ class AdminTools:
         for log in logs:
             user = self.session.get(User, log.user_id)
             username = user.username if user else "Unknown"
+            
+            # Check consent status
+            consent = self.session.exec(
+                select(ConsentRecord).where(ConsentRecord.user_id == log.user_id)
+            ).first()
+            has_consented = "Yes" if consent else "No"
             
             writer.writerow([
                 log.id,
@@ -186,6 +192,7 @@ class AdminTools:
                 log.timestamp.isoformat(),
                 log.duration_ms or '',
                 str(log.action_details),
+                has_consented,
                 log.context_data.get('market_year', ''),
                 log.context_data.get('market_phase', ''),
                 log.context_data.get('shock_stage', ''),
@@ -255,7 +262,7 @@ class AdminTools:
             "actions_by_type": {
                 action_type: count for action_type, count in action_types
             },
-            "generated_at": datetime.utcnow().isoformat()
+            "generated_at": datetime.now(timezone.utc).isoformat()
         }
 
 

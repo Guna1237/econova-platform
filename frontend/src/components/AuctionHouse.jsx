@@ -67,7 +67,7 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                 <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                     {!currentTicker ? (
                         <>
-                            {['GOLD', 'TECH', 'OIL', 'REAL', 'BOND'].map(ticker => (
+                            {['GOLD', 'TECH', 'OIL', 'REAL'].map(ticker => (
                                 <button
                                     key={ticker}
                                     onClick={async () => {
@@ -137,8 +137,7 @@ export default function AuctionHouse({ user, marketState, onUpdate }) {
                                 {currentTicker === 'TECH' ? 'Tech Growth ETF' :
                                     currentTicker === 'GOLD' ? 'Gold Reserves' :
                                         currentTicker === 'OIL' ? 'Oil Futures' :
-                                            currentTicker === 'REAL' ? 'Real Estate' :
-                                                currentTicker === 'BOND' ? 'Government Bonds' : 'Asset Class'}
+                                            currentTicker === 'REAL' ? 'Real Estate' : 'Asset Class'}
                             </div>
                             <div className="pill pill-red" style={{ marginTop: '1rem', fontSize: '0.75rem' }}>LIVE AUCTION</div>
                         </div>

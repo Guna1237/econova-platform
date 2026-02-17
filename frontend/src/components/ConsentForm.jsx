@@ -102,7 +102,7 @@ export default function ConsentForm({ onConsentAccepted }) {
                 <div style={{ padding: '3rem' }}>
                     <div style={{ marginBottom: '2.5rem' }}>
                         <h2 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', color: '#000', fontWeight: 700 }}>
-                            Research Participation (Optional)
+                            Research Participation
                         </h2>
                         <p style={{ fontSize: '1.1rem', lineHeight: '1.7', color: '#374151', marginBottom: '1.5rem' }}>
                             We are conducting research on <strong>team decision-making in financial markets</strong>.
@@ -246,11 +246,12 @@ export default function ConsentForm({ onConsentAccepted }) {
                                 type="button"
                                 onClick={handleSkip}
                                 style={{
+                                    marginTop: '1.5rem', // Moved down
                                     background: 'transparent',
                                     color: '#9CA3AF',
                                     border: 'none',
                                     padding: '0.5rem',
-                                    fontSize: '0.9rem',
+                                    fontSize: '0.8rem', // Reduced size
                                     textDecoration: 'underline',
                                     cursor: 'pointer'
                                 }}
