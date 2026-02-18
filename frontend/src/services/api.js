@@ -336,9 +336,18 @@ export default default_api;
 
 // --- WebSocket Connection ---
 export const connectWebSocket = (onMessage) => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = API_BASE_URL.replace(/^https?:\/\//, '');
-    const wsUrl = `${wsProtocol}//${wsHost}/ws`;
+    // robustly determine WS URL from API_BASE_URL
+    let wsUrl;
+    try {
+        const apiUrl = new URL(API_BASE_URL);
+        const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+        wsUrl = `${protocol}//${apiUrl.host}/ws`;
+    } catch (e) {
+        // Fallback if API_BASE_URL is relative or invalid
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.host;
+        wsUrl = `${wsProtocol}//${wsHost}/ws`;
+    }
 
     let ws = null;
     let reconnectTimer = null;

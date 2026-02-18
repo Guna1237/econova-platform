@@ -53,9 +53,18 @@ export default function Dashboard() {
         treasury: false
     });
 
+    const audioCtxRef = useRef(null);
+
     const playNotificationSound = (type = 'standard') => {
         try {
-            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (!audioCtxRef.current) {
+                audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = audioCtxRef.current;
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
+
             const now = ctx.currentTime;
 
             if (type === 'time') {
@@ -203,6 +212,30 @@ export default function Dashboard() {
             cleanupWs();
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Unlock AudioContext on first user interaction
+    useEffect(() => {
+        const unlockAudio = () => {
+            if (!audioCtxRef.current) {
+                audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtxRef.current.state === 'suspended') {
+                audioCtxRef.current.resume().then(() => {
+                    console.log('AudioContext resumed');
+                });
+            }
+            window.removeEventListener('click', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+        };
+
+        window.addEventListener('click', unlockAudio);
+        window.addEventListener('keydown', unlockAudio);
+
+        return () => {
+            window.removeEventListener('click', unlockAudio);
+            window.removeEventListener('keydown', unlockAudio);
+        };
+    }, []);
 
     const handleLogout = () => {
         logout();
