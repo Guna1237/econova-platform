@@ -86,10 +86,10 @@ class MarketEngine:
     def initialize_assets(self):
         if not self.session.exec(select(Asset)).first():
             assets = [
-                Asset(name="Gold Reserves", ticker="GOLD", base_price=5000.0, current_price=5000.0, volatility=0.15, macro_sensitivity=-0.8, base_cagr=0.03, description="Safe haven asset. Inversely correlated to market risk."),
-                Asset(name="Tech Growth ETF", ticker="TECH", base_price=1000.0, current_price=1000.0, volatility=0.40, macro_sensitivity=2.5, base_cagr=0.15, description="High growth, high risk technology sector."),
-                Asset(name="Crude Oil", ticker="OIL", base_price=80.0, current_price=80.0, volatility=0.30, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy commodity."),
-                Asset(name="Real Estate", ticker="REAL", base_price=2500.0, current_price=2500.0, volatility=0.10, macro_sensitivity=0.4, base_cagr=0.06, description="Stable growth real estate index."),
+                Asset(name="Gold Reserves", ticker="GOLD", base_price=5000.0, current_price=5000.0, volatility=0.10, macro_sensitivity=-0.8, base_cagr=0.03, description="Safe haven asset. Inversely correlated to market risk."),
+                Asset(name="Tech Growth ETF", ticker="TECH", base_price=1000.0, current_price=1000.0, volatility=0.25, macro_sensitivity=2.5, base_cagr=0.15, description="High growth, high risk technology sector."),
+                Asset(name="Crude Oil", ticker="OIL", base_price=80.0, current_price=80.0, volatility=0.20, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy commodity."),
+                Asset(name="Real Estate", ticker="REAL", base_price=2500.0, current_price=2500.0, volatility=0.08, macro_sensitivity=0.4, base_cagr=0.06, description="Stable growth real estate index."),
                 Asset(name="US Treasury Bills", ticker="TBILL", base_price=100.0, current_price=100.0, volatility=0.0, macro_sensitivity=0.0, base_cagr=0.03, description="Risk-free government securities. Guaranteed low yield (~3%/yr).")
             ]
             self.session.add_all(assets)
@@ -215,10 +215,10 @@ class MarketEngine:
                         self.session.add(event)
 
             # Calculation
-            # Calculation - Increased noise for inefficiency
-            noise = random.gauss(0, asset.volatility * 1.5 * math.sqrt(quarter_scale))
-            if random.random() < 0.10: # 10% chance of extra random swing
-                noise += random.choice([-0.05, 0.05])
+            # Calculation - Reduced noise for stability
+            noise = random.gauss(0, asset.volatility * 0.8 * math.sqrt(quarter_scale))
+            if random.random() < 0.05: # 5% chance of extra random swing
+                noise += random.choice([-0.03, 0.03])
             growth = (asset.base_cagr * quarter_scale) + shock_factor + k_reversion + micro_impact + noise
             
             # Cap single-quarter changes

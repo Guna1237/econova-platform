@@ -82,17 +82,29 @@ export default function Dashboard() {
                     osc.stop(now + i * 0.1 + 0.5);
                 });
             } else {
-                // Standard Beep (Softer)
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
-                osc.connect(gain);
-                gain.connect(ctx.destination);
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(600, now); // A5 -> ~D5 (Lower pitch)
-                gain.gain.setValueAtTime(0.05, now); // Reduced volume
-                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-                osc.start(now);
-                osc.stop(now + 0.3);
+                // Pleasant Chime (Harmonic Stack)
+                const fundamental = 880; // A5
+                const harmonics = [1, 1.5]; // Perfect Fifth
+
+                harmonics.forEach((ratio, i) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(fundamental * ratio, now);
+
+                    // Gentle Attack
+                    gain.gain.setValueAtTime(0, now);
+                    gain.gain.linearRampToValueAtTime(0.05 / (i + 1), now + 0.02);
+
+                    // Long Decay
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+
+                    osc.start(now);
+                    osc.stop(now + 1.0);
+                });
             }
         } catch (e) { console.error("Audio play failed", e); }
     };

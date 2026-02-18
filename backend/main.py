@@ -149,13 +149,11 @@ app = FastAPI(title="Econova API", lifespan=lifespan)
 
 # Restrict CORS in production
 environment = os.getenv("ENVIRONMENT", "development")
-# allow_origins = ["*"] if environment == "development" else [os.getenv("FRONTEND_URL", "*")]
+allow_origins = ["*"] if environment == "development" else [os.getenv("FRONTEND_URL", "*")]
 
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=allow_origins, 
-    # To allow credentials with "all" origins in some browsers/setups, regex is safer than ["*"]
-    allow_origin_regex="https?://.*", 
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
