@@ -7,7 +7,7 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectWebSocket } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -54,6 +54,7 @@ export default function Dashboard() {
     });
 
     const audioCtxRef = useRef(null);
+    const rtStatusRef = useRef('disconnected');
 
     const playNotificationSound = (type = 'standard') => {
         try {
@@ -68,18 +69,18 @@ export default function Dashboard() {
             const now = ctx.currentTime;
 
             if (type === 'time') {
-                // Major Chord Arpeggio (C4-E4-G4) for success/time advance
+                // Major Chord Arpeggio (C4-E4-G4) for time advance
                 [261.63, 329.63, 392.00].forEach((freq, i) => {
                     const osc = ctx.createOscillator();
                     const gain = ctx.createGain();
                     osc.connect(gain);
                     gain.connect(ctx.destination);
                     osc.type = 'triangle';
-                    osc.frequency.setValueAtTime(freq, now + i * 0.1);
-                    gain.gain.setValueAtTime(0.1, now + i * 0.1);
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.1 + 0.5);
-                    osc.start(now + i * 0.1);
-                    osc.stop(now + i * 0.1 + 0.5);
+                    osc.frequency.setValueAtTime(freq, now + i * 0.12);
+                    gain.gain.setValueAtTime(0.3, now + i * 0.12);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.12 + 0.8);
+                    osc.start(now + i * 0.12);
+                    osc.stop(now + i * 0.12 + 0.8);
                 });
             } else {
                 // Pleasant Chime (Harmonic Stack)
@@ -97,13 +98,13 @@ export default function Dashboard() {
 
                     // Gentle Attack
                     gain.gain.setValueAtTime(0, now);
-                    gain.gain.linearRampToValueAtTime(0.05 / (i + 1), now + 0.02);
+                    gain.gain.linearRampToValueAtTime(0.2 / (i + 1), now + 0.05); // Increased volume
 
                     // Long Decay
-                    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.0);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
 
                     osc.start(now);
-                    osc.stop(now + 1.0);
+                    osc.stop(now + 1.2);
                 });
             }
         } catch (e) { console.error("Audio play failed", e); }
@@ -184,15 +185,14 @@ export default function Dashboard() {
 
     useEffect(() => {
         fetchData();
-        // Polling as fallback (slower since we have WebSocket)
-        const interval = setInterval(fetchData, 10000);
+        // Dynamic polling: 3s when real-time is down, 15s when connected
+        let interval = setInterval(fetchData, 3000);
 
-        // WebSocket for instant real-time updates
-        const cleanupWs = connectWebSocket((msg) => {
-            console.log('[WS] Event:', msg.type, msg.data);
-            setLastUpdate(Date.now()); // Trigger updates for dependent components
+        // Real-time connection (SSE → WS → fast polling)
+        const cleanupRt = connectRealtime((msg) => {
+            console.log('[RT] Event:', msg.type, msg.data);
+            setLastUpdate(Date.now());
 
-            // Notification Logic
             let notifyTab = null;
             let soundType = 'standard';
 
@@ -204,11 +204,10 @@ export default function Dashboard() {
                 if (action.includes('loan')) notifyTab = 'credit';
                 if (action.includes('year') || action.includes('quarter')) {
                     soundType = 'time';
-                    playNotificationSound('time'); // Always play time sound regardless of tab
+                    playNotificationSound('time');
                 }
             }
 
-            // Only notify if we are NOT on that tab currently
             if (notifyTab && activeTab !== notifyTab) {
                 setNotifications(prev => ({ ...prev, [notifyTab]: true }));
                 if (soundType !== 'time') playNotificationSound('standard');
@@ -217,11 +216,20 @@ export default function Dashboard() {
             if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed', 'news_update'].includes(msg.type)) {
                 fetchData();
             }
+        }, (status) => {
+            rtStatusRef.current = status;
+            // Adjust polling speed based on real-time connection health
+            clearInterval(interval);
+            if (status === 'connected') {
+                interval = setInterval(fetchData, 15000); // Slow poll when connected
+            } else {
+                interval = setInterval(fetchData, 3000); // Fast poll when disconnected
+            }
         });
 
         return () => {
             clearInterval(interval);
-            cleanupWs();
+            cleanupRt();
         };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

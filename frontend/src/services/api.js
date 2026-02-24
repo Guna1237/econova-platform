@@ -334,72 +334,114 @@ export const deleteNews = async (id) => {
 
 export default default_api;
 
-// --- WebSocket Connection ---
-export const connectWebSocket = (onMessage) => {
-    // robustly determine WS URL from API_BASE_URL
-    let wsUrl;
-    try {
-        const apiUrl = new URL(API_BASE_URL);
-        const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
-        wsUrl = `${protocol}//${apiUrl.host}/ws`;
-    } catch (e) {
-        // Fallback if API_BASE_URL is relative or invalid
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.host;
-        wsUrl = `${wsProtocol}//${wsHost}/ws`;
-    }
-
+// --- Real-time Connection (SSE primary, WS fallback) ---
+export const connectRealtime = (onMessage, onStatusChange) => {
+    const sseUrl = `${API_BASE_URL}/events`;
+    let eventSource = null;
     let ws = null;
     let reconnectTimer = null;
     let pingInterval = null;
+    let closed = false;
+    let wsBackoff = 3000; // Start at 3s, cap at 30s
 
-    const connect = () => {
+    const setStatus = (s) => onStatusChange && onStatusChange(s);
+
+    // --- SSE (primary) ---
+    const connectSSE = () => {
+        if (closed) return;
         try {
+            setStatus('connecting');
+            eventSource = new EventSource(sseUrl);
+
+            eventSource.onopen = () => {
+                console.log('[SSE] Connected');
+                setStatus('connected');
+            };
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type !== 'connected') {
+                        onMessage(data);
+                    }
+                } catch (e) {
+                    // heartbeat or unparseable
+                }
+            };
+
+            eventSource.onerror = () => {
+                console.warn('[SSE] Error, falling back to WebSocket...');
+                setStatus('disconnected');
+                if (eventSource) { eventSource.close(); eventSource = null; }
+                if (!closed) reconnectTimer = setTimeout(connectWS, 1000);
+            };
+        } catch (e) {
+            console.warn('[SSE] Failed, trying WebSocket...');
+            if (!closed) connectWS();
+        }
+    };
+
+    // --- WebSocket (fallback) ---
+    const connectWS = () => {
+        if (closed) return;
+        let wsUrl;
+        try {
+            const apiUrl = new URL(API_BASE_URL);
+            const protocol = apiUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+            wsUrl = `${protocol}//${apiUrl.host}/ws`;
+        } catch (e) {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        }
+
+        try {
+            setStatus('connecting');
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
                 console.log('[WS] Connected');
-                // Send ping every 30s to keep alive
+                setStatus('connected');
+                wsBackoff = 3000; // Reset backoff on success
                 pingInterval = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send('ping');
-                    }
+                    if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
                 }, 30000);
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.type !== 'pong') {
-                        onMessage(data);
-                    }
-                } catch (e) {
-                    console.warn('[WS] Failed to parse:', e);
-                }
+                    if (data.type !== 'pong') onMessage(data);
+                } catch (e) { /* ignore */ }
             };
 
             ws.onclose = () => {
-                console.log('[WS] Disconnected, reconnecting in 3s...');
                 clearInterval(pingInterval);
-                reconnectTimer = setTimeout(connect, 3000);
+                setStatus('disconnected');
+                if (!closed) {
+                    console.log(`[WS] Disconnected, retrying in ${wsBackoff / 1000}s...`);
+                    reconnectTimer = setTimeout(connectSSE, wsBackoff); // Try SSE again
+                    wsBackoff = Math.min(wsBackoff * 1.5, 30000); // Exponential backoff, cap 30s
+                }
             };
 
-            ws.onerror = (err) => {
-                console.warn('[WS] Error:', err);
-                ws.close();
+            ws.onerror = () => {
+                if (ws) ws.close();
             };
         } catch (e) {
-            console.warn('[WS] Connection failed:', e);
-            reconnectTimer = setTimeout(connect, 3000);
+            setStatus('disconnected');
+            if (!closed) reconnectTimer = setTimeout(connectSSE, wsBackoff);
         }
     };
 
-    connect();
+    // Start with SSE
+    connectSSE();
 
     // Return cleanup function
     return () => {
+        closed = true;
         clearTimeout(reconnectTimer);
         clearInterval(pingInterval);
+        if (eventSource) eventSource.close();
         if (ws) ws.close();
     };
 };

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import List, Optional, Literal
+import asyncio
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select
@@ -11,7 +12,7 @@ from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid,
 from .activity_logger import ActivityLogger
 from .admin_tools import AdminTools
 from pydantic import BaseModel, EmailStr, field_validator
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from datetime import datetime, timezone
 import os
 import json
@@ -119,6 +120,34 @@ async def lifespan(app: FastAPI):
         session.commit()
     yield
 
+# --- SSE (Server-Sent Events) Manager ---
+class SSEManager:
+    """Manages SSE client connections using async queues."""
+    def __init__(self):
+        self.clients: list[asyncio.Queue] = []
+
+    def add_client(self) -> asyncio.Queue:
+        q = asyncio.Queue(maxsize=50)
+        self.clients.append(q)
+        return q
+
+    def remove_client(self, q: asyncio.Queue):
+        if q in self.clients:
+            self.clients.remove(q)
+
+    async def broadcast(self, event_type: str, data: dict = None):
+        message = json.dumps({"type": event_type, "data": data or {}})
+        dead = []
+        for q in self.clients:
+            try:
+                q.put_nowait(message)
+            except asyncio.QueueFull:
+                dead.append(q)
+        for q in dead:
+            self.remove_client(q)
+
+sse_manager = SSEManager()
+
 # --- WebSocket Connection Manager ---
 class ConnectionManager:
     def __init__(self):
@@ -133,6 +162,7 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, event_type: str, data: dict = None):
+        # Broadcast to WebSocket clients
         message = json.dumps({"type": event_type, "data": data or {}})
         disconnected = []
         for connection in self.active_connections:
@@ -142,6 +172,8 @@ class ConnectionManager:
                 disconnected.append(connection)
         for conn in disconnected:
             self.disconnect(conn)
+        # Also broadcast to SSE clients
+        await sse_manager.broadcast(event_type, data)
 
 ws_manager = ConnectionManager()
 
@@ -149,7 +181,8 @@ app = FastAPI(title="Econova API", lifespan=lifespan)
 
 # Restrict CORS in production
 environment = os.getenv("ENVIRONMENT", "development")
-allow_origins = ["*"] if environment == "development" else [os.getenv("FRONTEND_URL", "*")]
+# Allow all origins for now to fix WebSocket connectivity issues between Vercel and Render
+allow_origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -159,15 +192,45 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- SSE Endpoint ---
+@app.get("/events")
+async def sse_events():
+    """Server-Sent Events endpoint for real-time updates (WebSocket alternative)."""
+    q = sse_manager.add_client()
+
+    async def event_stream():
+        try:
+            # Send initial heartbeat so the client knows the connection is alive
+            yield f"data: {json.dumps({'type': 'connected', 'data': {}})}\n\n"
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=25.0)
+                    yield f"data: {msg}\n\n"
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield f": heartbeat\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            sse_manager.remove_client(q)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable Nginx buffering
+        }
+    )
+
 # --- WebSocket Endpoint ---
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive, wait for pings
             data = await websocket.receive_text()
-            # Client can send 'ping' to keep alive
             if data == 'ping':
                 await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:

@@ -104,7 +104,7 @@ export default function PriceChart({ asset }) {
             </div>
 
             {/* Chart */}
-            <div style={{ flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, minHeight: '300px' }}>
                 <ResponsiveContainer>
                     <AreaChart data={displayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                         <defs>
