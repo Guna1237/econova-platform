@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { getPriceHistory } from '../services/api';
 import { ZoomIn, ZoomOut, BarChart3, TrendingUp } from 'lucide-react';
 
-export default function PriceChart({ asset }) {
+export default function PriceChart({ asset, lastUpdate }) {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
@@ -30,7 +30,7 @@ export default function PriceChart({ asset }) {
                 setError(err.message);
                 setLoading(false);
             });
-    }, [asset?.id, viewMode]);
+    }, [asset?.id, viewMode, lastUpdate]);
 
     useEffect(() => {
         fetchHistory();

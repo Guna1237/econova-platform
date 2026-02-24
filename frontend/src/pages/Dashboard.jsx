@@ -771,7 +771,7 @@ export default function Dashboard() {
                                                         <span className="mono-num" style={{ fontSize: '1.2rem' }}>${selectedAsset.current_price.toFixed(2)}</span>
                                                     </div>
                                                     <div style={{ height: '350px', width: '100%', minHeight: '350px' }}>
-                                                        <PriceChart asset={selectedAsset} />
+                                                        <PriceChart asset={selectedAsset} lastUpdate={lastUpdate} />
                                                     </div>
                                                 </div>
                                             ) : (
