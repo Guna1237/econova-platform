@@ -220,13 +220,19 @@ app = FastAPI(title="Econova API", lifespan=lifespan)
 
 # Restrict CORS in production
 environment = os.getenv("ENVIRONMENT", "development")
-# Allow all origins for now to fix WebSocket connectivity issues between Vercel and Render
-allow_origins = ["*"]
+
+# Specify exact origins so allow_credentials works in modern browsers
+allow_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://mu-aeon-econova-biddingwars.vercel.app"
+]
 
 # Add CORS middleware with specific allowed origins for credential support
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="http://.*", # Allow any http origin for local network/dev
+    allow_origins=allow_origins,
+    allow_origin_regex="https?://.*", # General fallback for other local networks
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
