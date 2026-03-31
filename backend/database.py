@@ -29,8 +29,8 @@ else:
         sqlite_url,
         echo=False,
         connect_args=connect_args,
-        pool_size=30,          # Support 30 concurrent connections
-        max_overflow=20,       # Allow up to 50 total if needed
+        pool_size=40,          # Support 40 concurrent connections
+        max_overflow=30,       # Allow up to 50 total if needed
         pool_pre_ping=True,    # Detect stale connections early
         pool_timeout=10,       # Don't wait more than 10s for a slot
     )

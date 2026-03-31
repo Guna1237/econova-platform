@@ -57,17 +57,17 @@ class NewsCaster:
             ("Central Bank announces gold buying program.", 0.08, 2), # Demand up
             ("Mining strike halts global production.", 0.12, 1), # Supply down
         ],
-        "TECH": [
-            ("Breakthrough in quantum computing efficiency announced.", 0.15, 3), # Hype
-            ("Regulatory scrutiny on big tech monopolies increases.", -0.10, 2), # Fear
-            ("Supply chain shortage affects chip manufacturing.", -0.08, 1),
+        "NVDA": [
+            ("NVIDIA announces next-gen GPU architecture, exceeding analyst expectations.", 0.15, 3),
+            ("Regulatory scrutiny on AI chip exports increases.", -0.10, 2),
+            ("Supply chain shortage affects advanced chip manufacturing.", -0.08, 1),
         ],
-        "OIL": [
+        "BRENT": [
             ("OPEC announces surprise production cut.", 0.20, 1), # Shock
             ("New electric vehicle subsidy reduces oil demand forecasts.", -0.05, 4), # Trend
             ("Geopolitical tension threatens major pipeline.", 0.12, 1),
         ],
-        "REAL": [
+        "REITS": [
             ("Housing boom driven by low interest rates.", 0.08, 3),
             ("New zoning laws restrict commercially viable land.", 0.05, 5),
             ("Construction material costs skyrocket.", -0.06, 2),
@@ -87,9 +87,9 @@ class MarketEngine:
         if not self.session.exec(select(Asset)).first():
             assets = [
                 Asset(name="Gold Reserves", ticker="GOLD", base_price=5000.0, current_price=5000.0, volatility=0.10, macro_sensitivity=-0.8, base_cagr=0.03, description="Safe haven asset. Inversely correlated to market risk."),
-                Asset(name="Tech Growth ETF", ticker="TECH", base_price=1000.0, current_price=1000.0, volatility=0.25, macro_sensitivity=2.5, base_cagr=0.15, description="High growth, high risk technology sector."),
-                Asset(name="Crude Oil", ticker="OIL", base_price=80.0, current_price=80.0, volatility=0.20, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy commodity."),
-                Asset(name="Real Estate", ticker="REAL", base_price=2500.0, current_price=2500.0, volatility=0.08, macro_sensitivity=0.4, base_cagr=0.06, description="Stable growth real estate index."),
+                Asset(name="NVIDIA Growth ETF", ticker="NVDA", base_price=1000.0, current_price=1000.0, volatility=0.25, macro_sensitivity=2.5, base_cagr=0.15, description="High growth, high risk AI & semiconductor sector."),
+                Asset(name="S&P Brent Crude Oil", ticker="BRENT", base_price=80.0, current_price=80.0, volatility=0.20, macro_sensitivity=0.8, base_cagr=0.08, description="Cyclical energy commodity benchmarked to Brent crude."),
+                Asset(name="REITs Index", ticker="REITS", base_price=2500.0, current_price=2500.0, volatility=0.08, macro_sensitivity=0.4, base_cagr=0.06, description="Real Estate Investment Trust diversified index."),
                 Asset(name="US Treasury Bills", ticker="TBILL", base_price=100.0, current_price=100.0, volatility=0.0, macro_sensitivity=0.0, base_cagr=0.03, description="Risk-free government securities. Guaranteed low yield (~3%/yr).")
             ]
             self.session.add_all(assets)
@@ -130,6 +130,7 @@ class MarketEngine:
             assets = self.session.exec(select(Asset)).all()
             for asset in assets:
                 if asset.ticker == 'TBILL': continue  # No events for T-Bills
+                if asset.ticker not in NewsCaster.MICRO_TEMPLATES: continue
                 existing = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
                 if len(existing) >= 1: continue
                 if random.random() < 0.15:
@@ -183,10 +184,10 @@ class MarketEngine:
                 beta = asset.macro_sensitivity
                 if state.shock_type == 'INFLATION':
                     if asset.ticker == 'GOLD': shock_factor = 0.12 * quarter_scale
-                    elif asset.ticker == 'TECH': shock_factor = -0.15 * quarter_scale
+                    elif asset.ticker == 'NVDA': shock_factor = -0.15 * quarter_scale
                     else: shock_factor = -0.10 * abs(beta) * quarter_scale
                 elif state.shock_type == 'RECESSION':
-                    if asset.ticker in ['OIL', 'REAL']: shock_factor = -0.15 * quarter_scale
+                    if asset.ticker in ['BRENT', 'REITS']: shock_factor = -0.15 * quarter_scale
                     elif asset.ticker == 'GOLD': shock_factor = 0.05 * quarter_scale
                     else: shock_factor = -0.12 * abs(beta) * quarter_scale
                 else:
@@ -244,16 +245,27 @@ class MarketEngine:
             interest = loan.principal * (loan.interest_rate / 100.0) * quarter_scale
             
             if borrower.cash < interest:
-                borrower.is_frozen = True
-                loan.status = LoanStatus.DEFAULTED
-                state.news_feed = f"BANKRUPTCY ALERT: {borrower.username} defaulted!"
+                # Grace period: 2nd consecutive miss = default
+                loan.missed_quarters += 1
+                if loan.missed_quarters >= 2:
+                    borrower.is_frozen = True
+                    loan.status = LoanStatus.DEFAULTED
+                    state.news_feed = f"BANKRUPTCY ALERT: {borrower.username} defaulted on loan!"
+                else:
+                    # First miss - warn but don't freeze yet
+                    state.news_feed = f"WARNING: {borrower.username} missed interest payment (Quarter {loan.missed_quarters}/2 before default)."
                 self.session.add(borrower)
                 self.session.add(loan)
             else:
                 borrower.cash -= interest
                 lender.cash += interest
+                # Reset grace period on successful payment
+                if loan.missed_quarters > 0:
+                    loan.missed_quarters = 0
+                    self.session.add(loan)
                 self.session.add(borrower)
                 self.session.add(lender)
+
 
         state.current_year = next_year
         state.current_quarter = next_q
@@ -282,10 +294,10 @@ class MarketEngine:
     
     # Lot configurations: {ticker: [(quantity, base_price_multiplier), ...]}
     LOT_CONFIGS = {
-        'GOLD': [(10, 1.0), (15, 1.0), (20, 1.0)],
-        'TECH': [(50, 1.0), (75, 1.0), (100, 1.0)],
-        'OIL': [(100, 1.0), (150, 1.0), (200, 1.0)],
-        'REAL': [(5, 1.0), (10, 1.0)],
+        'GOLD':  [(5, 1.0), (10, 1.0), (15, 1.0), (20, 1.05)],   # 4 lots, last lot premium
+        'NVDA':  [(25, 1.0), (50, 1.0), (75, 1.0), (100, 1.05)],  # 4 lots
+        'BRENT': [(50, 1.0), (100, 1.0), (150, 1.0), (200, 1.05)],# 4 lots
+        'REITS': [(3, 1.0), (5, 1.0), (8, 1.0), (10, 1.05)],      # 4 lots
         # TBILL is NOT auctioned — players buy at face value
     }
     
@@ -367,7 +379,7 @@ class MarketEngine:
         self.session.commit()
     
     def resolve_auction(self):
-        """Resolve active lot and open next one if available"""
+        """Close (hammer down) the active lot only — does NOT auto-advance. Admin calls open_next_lot separately."""
         state = self.get_state()
         ticker = state.active_auction_asset
         if not ticker:
@@ -381,15 +393,14 @@ class MarketEngine:
         active_lot = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
+                AuctionLot.status == LotStatus.ACTIVE,
             )
         ).first()
         
         if not active_lot:
             return "No active lot to resolve"
         
-        results_msg = ""
-        
-        # Resolve the active lot
+        # --- Resolve lot with bids ---
         bids = self.session.exec(
             select(AuctionBid).where(
                 AuctionBid.lot_id == active_lot.id
@@ -399,15 +410,11 @@ class MarketEngine:
         if bids:
             winner_bid = bids[0]
             winner = self.session.get(User, winner_bid.user_id)
-            
             total_cost = winner_bid.amount * winner_bid.quantity
             
-            # Check funds
             if winner.cash >= total_cost:
-                # Execute transaction
                 winner.cash -= total_cost
                 
-                # Update/Create Holding
                 holding = self.session.exec(select(Holding).where(
                     Holding.user_id == winner.id,
                     Holding.asset_id == asset.id
@@ -428,51 +435,119 @@ class MarketEngine:
                     )
                     self.session.add(holding)
                 
-                # Update lot
+                # User-created listing: pay seller (minus fee)
+                if active_lot.seller_id:
+                    seller = self.session.get(User, active_lot.seller_id)
+                    if seller:
+                        revenue = total_cost
+                        cost_basis = (active_lot.seller_cost_basis or 0.0) * active_lot.quantity
+                        capital_gain = revenue - cost_basis
+                        fee = capital_gain * 0.20 if capital_gain > 0 else 500.0
+                        net_payout = revenue - fee
+                        seller.cash += net_payout
+                        self.session.add(seller)
+                        results_msg = f"Lot {active_lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f} (Seller payout: ${net_payout:,.0f} after fees)"
+                    else:
+                        results_msg = f"Lot {active_lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f}"
+                else:
+                    results_msg = f"Lot {active_lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f}"
+                
                 active_lot.status = LotStatus.SOLD
                 active_lot.winner_id = winner.id
                 active_lot.winning_bid = winner_bid.amount
-                
                 self.session.add(winner)
                 self.session.add(active_lot)
                 
-                # Incremental Price Update
-                # Weight by volume relative to supply could be better, but simple weighted average is safer for stability
-                # Using 0.95 (current) vs 0.05 (new) to avoid massive swings from small lots
+                # Incremental price nudge
                 asset.current_price = (0.95 * asset.current_price) + (0.05 * winner_bid.amount)
                 self.session.add(asset)
-
-                results_msg = f"Lot {active_lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f}"
             else:
                 active_lot.status = LotStatus.CANCELLED
                 self.session.add(active_lot)
-                results_msg = f"Lot {active_lot.lot_number} CANCELLED (Winner insufficient funds)"
+                results_msg = f"Lot {active_lot.lot_number} CANCELLED (Winner had insufficient funds)"
+                
+                if active_lot.seller_id:
+                    seller_holding = self.session.exec(select(Holding).where(
+                        Holding.user_id == active_lot.seller_id,
+                        Holding.asset_id == asset.id
+                    )).first()
+                    if seller_holding:
+                        seller_holding.quantity += active_lot.quantity
+                        self.session.add(seller_holding)
+                    else:
+                        seller_holding = Holding(user_id=active_lot.seller_id, asset_id=asset.id, quantity=active_lot.quantity, avg_cost=active_lot.seller_cost_basis or 0.0)
+                        self.session.add(seller_holding)
         else:
             active_lot.status = LotStatus.CANCELLED
             self.session.add(active_lot)
             results_msg = f"Lot {active_lot.lot_number} CLOSED (No bids)"
-
-        # Activate NEXT lot
-        next_lot = self.session.exec(
+            
+            if active_lot.seller_id:
+                seller_holding = self.session.exec(select(Holding).where(
+                    Holding.user_id == active_lot.seller_id,
+                    Holding.asset_id == asset.id
+                )).first()
+                if seller_holding:
+                    seller_holding.quantity += active_lot.quantity
+                    self.session.add(seller_holding)
+                else:
+                    seller_holding = Holding(user_id=active_lot.seller_id, asset_id=asset.id, quantity=active_lot.quantity, avg_cost=active_lot.seller_cost_basis or 0.0)
+                    self.session.add(seller_holding)
+        
+        # Do NOT auto-advance. Admin must call open_next_lot or end_auction manually.
+        self.session.commit()
+        
+        # Check if there are more pending lots so frontend can show the button
+        pending_lots = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
                 AuctionLot.status == LotStatus.PENDING,
                 AuctionLot.lot_number > active_lot.lot_number
+            )
+        ).all()
+        has_next = len(pending_lots) > 0
+        return {"message": results_msg, "has_next_lot": has_next, "lots_remaining": len(pending_lots)}
+
+    def open_next_lot(self):
+        """Admin-controlled: open the next PENDING lot for bidding."""
+        state = self.get_state()
+        ticker = state.active_auction_asset
+        if not ticker:
+            return {"message": "No active auction", "opened": False}
+
+        # Make sure there's no already-active lot
+        already_active = self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.status == LotStatus.ACTIVE
+            )
+        ).first()
+        if already_active:
+            return {"message": f"Lot {already_active.lot_number} is still open for bidding. Hammer it down first.", "opened": False}
+
+        next_lot = self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.status == LotStatus.PENDING,
             ).order_by(AuctionLot.lot_number)
         ).first()
 
-        if next_lot:
-            next_lot.status = LotStatus.ACTIVE
-            self.session.add(next_lot)
-            results_msg += f" | Lot {next_lot.lot_number} now ACTIVE"
-        else:
-            results_msg += " | Auction Complete"
-            state.active_auction_asset = None # Close auction if no lots left
-            state.phase = "TRADING"
-            self.session.add(state)
-            
+        if not next_lot:
+            return {"message": "No more pending lots. Use End Auction to close.", "opened": False}
+
+        next_lot.status = LotStatus.ACTIVE
+        self.session.add(next_lot)
         self.session.commit()
-        return results_msg
+        return {"message": f"Lot {next_lot.lot_number} is now open for bidding!", "opened": True, "lot_number": next_lot.lot_number}
+
+    def end_auction(self):
+        """Admin-controlled: close the auction entirely after all lots are done."""
+        state = self.get_state()
+        state.active_auction_asset = None
+        state.phase = "TRADING"
+        self.session.add(state)
+        self.session.commit()
+        return {"message": "Auction ended. Market returned to TRADING phase."}
 
     # --- TRADING LOGIC ---
     def execute_trade(self, buyer_id: int, seller_id: int, asset_id: int, qty: int, price: float):

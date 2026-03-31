@@ -2,9 +2,9 @@ import axios from 'axios';
 
 // Auto-detect environment: use production URL if deployed, localhost for local dev
 const API_BASE_URL = import.meta.env.VITE_API_URL ||
-    (window.location.hostname === 'localhost'
-        ? 'http://localhost:8000'
-        : 'https://econova-backend-ybiq.onrender.com');
+    ((window.location.hostname.includes('onrender.com') || window.location.hostname.includes('vercel.app'))
+        ? 'https://econova-backend-ybiq.onrender.com'
+        : `http://${window.location.hostname}:8000`);
 
 const default_api = axios.create({
     baseURL: API_BASE_URL,
@@ -78,6 +78,12 @@ export const getAdminUsers = async () => {
     const response = await default_api.get('/admin/users');
     return response.data;
 };
+
+export const getLeaderboard = async () => {
+    const response = await default_api.get('/admin/leaderboard');
+    return response.data;
+};
+
 
 export const createTeamUser = async (username, password) => {
     const response = await default_api.post('/admin/users/create', { username, password });
@@ -157,6 +163,17 @@ export const resolveAuction = async () => {
     const response = await default_api.post(`/admin/auction/resolve`);
     return response.data;
 };
+
+export const openNextLot = async () => {
+    const response = await default_api.post(`/admin/auction/next-lot`);
+    return response.data;
+};
+
+export const endAuction = async () => {
+    const response = await default_api.post(`/admin/auction/end`);
+    return response.data;
+};
+
 
 export const triggerShock = async (type, action) => {
     const response = await default_api.post('/admin/trigger-shock', { type, action });
@@ -332,7 +349,96 @@ export const deleteNews = async (id) => {
     return response.data;
 };
 
+// --- NEW ADMIN CONTROLS ---
+
+export const addCashToTeam = async (teamId, amount, reason = '') => {
+    const response = await default_api.post(`/admin/teams/${teamId}/add-cash`, { amount, reason });
+    return response.data;
+};
+
+export const penalizeTeam = async (teamId, amount, reason = '') => {
+    const response = await default_api.post(`/admin/teams/${teamId}/penalty`, { amount, reason });
+    return response.data;
+};
+
+export const toggleTradeApproval = async () => {
+    const response = await default_api.post('/admin/market/toggle-trade-approval');
+    return response.data;
+};
+
+export const getTradeApprovals = async () => {
+    const response = await default_api.get('/admin/trade-approvals');
+    return response.data;
+};
+
+export const approveTradeApproval = async (approvalId, adminNote = '') => {
+    const response = await default_api.post(`/admin/trade-approvals/${approvalId}/approve`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const rejectTradeApproval = async (approvalId, adminNote = '') => {
+    const response = await default_api.post(`/admin/trade-approvals/${approvalId}/reject`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const migrateAssets = async () => {
+    const response = await default_api.post('/admin/migrate-assets');
+    return response.data;
+};
+
+// --- CREDIT FACILITY ---
+export const openCreditFacility = async () => {
+    const response = await default_api.post('/admin/credit/open');
+    return response.data;
+};
+
+export const closeCreditFacility = async () => {
+    const response = await default_api.post('/admin/credit/close');
+    return response.data;
+};
+
+// --- LOAN APPROVALS ---
+export const getLoanApprovals = async () => {
+    const response = await default_api.get('/admin/loan-approvals');
+    return response.data;
+};
+
+export const approveLoan = async (approvalId, adminNote = '') => {
+    const response = await default_api.post(`/admin/loan-approvals/${approvalId}/approve`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const rejectLoan = async (approvalId, adminNote = '') => {
+    const response = await default_api.post(`/admin/loan-approvals/${approvalId}/reject`, { admin_note: adminNote });
+    return response.data;
+};
+
+// --- TEAM PORTFOLIO (ADMIN) ---
+export const getTeamPortfolio = async (teamId) => {
+    const response = await default_api.get(`/admin/teams/${teamId}/portfolio`);
+    return response.data;
+};
+
+// --- ACTIVITY FEED ---
+export const getActivityFeed = async () => {
+    const response = await default_api.get('/admin/activity-feed');
+    return response.data;
+};
+
+export const getTeamActivity = async (teamId) => {
+    const response = await default_api.get(`/admin/teams/${teamId}/activity`);
+    return response.data;
+};
+
+// --- USER AUCTION LOTS ---
+export const getMyAuctionLots = async () => {
+    const response = await default_api.get('/auction/my-lots');
+    return response.data;
+};
+
 export default default_api;
+
+
 
 // --- Real-time Connection (SSE primary, WS fallback) ---
 export const connectRealtime = (onMessage, onStatusChange) => {

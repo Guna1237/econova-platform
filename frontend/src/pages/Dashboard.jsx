@@ -7,7 +7,7 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -23,6 +23,9 @@ import DataExport from '../components/DataExport';
 import PrivateTrading from '../components/PrivateTrading';
 import NewsTab from '../components/NewsTab';
 import Treasury from '../components/Treasury';
+import AdminTradeApprovals from '../components/AdminTradeApprovals';
+import AdminLoanApprovals from '../components/AdminLoanApprovals';
+import AdminLeaderboard from '../components/AdminLeaderboard';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -202,15 +205,28 @@ export default function Dashboard() {
             if (msg.type === 'market_update') {
                 const action = msg.data?.action || '';
                 if (action.includes('loan')) notifyTab = 'credit';
+                if (action === 'trade_pending_approval') {
+                    notifyTab = 'admin_panel';
+                    // Always play sound for admin on trade approval request
+                    playNotificationSound('standard');
+                }
                 if (action.includes('year') || action.includes('quarter')) {
                     soundType = 'time';
                     playNotificationSound('time');
+                }
+                if (action === 'offer_created') {
+                    const currentUser = user?.username;
+                    const target = msg.data?.to;
+                    // Play sound if: open offer OR the offer is specifically for me
+                    if (!target || target === currentUser) {
+                        notifyTab = 'marketplace';
+                        playNotificationSound('standard');
+                    }
                 }
             }
 
             if (notifyTab && activeTab !== notifyTab) {
                 setNotifications(prev => ({ ...prev, [notifyTab]: true }));
-                if (soundType !== 'time') playNotificationSound('standard');
             }
 
             if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed', 'news_update'].includes(msg.type)) {
@@ -328,6 +344,35 @@ export default function Dashboard() {
         } catch (e) { toast.error("Failed to trigger shock"); }
     };
 
+    const handleToggleTradeApproval = async () => {
+        try {
+            const res = await toggleTradeApproval();
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to toggle trade approval mode'); }
+    };
+
+    const handleMigrateAssets = async () => {
+        try {
+            const res = await migrateAssets();
+            toast.success(res.message);
+            fetchData();
+        } catch (e) { toast.error('Asset migration failed: ' + (e.response?.data?.detail || e.message)); }
+    };
+
+    const handleToggleCreditFacility = async () => {
+        try {
+            let res;
+            if (marketState?.credit_facility_open) {
+                res = await closeCreditFacility();
+            } else {
+                res = await openCreditFacility();
+            }
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to toggle credit facility'); }
+    };
+
     if (loading) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column', gap: '1rem' }}>
             <div className="animate-spin" style={{ width: '40px', height: '40px', border: '3px solid #D1202F', borderTopColor: 'transparent', borderRadius: '50%' }}></div>
@@ -369,14 +414,14 @@ export default function Dashboard() {
     }
 
     return (
-        <div className="animate-fade-in" style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
+        <div className="animate-fade-in" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
             <Toaster position="bottom-right" richColors theme="light" />
 
             {/* 3.2 HEADER (Institutional Identity) */}
             <header style={{
                 background: '#FFFFFF',
                 borderBottom: '1px solid #000000',
-                height: '65px',
+                height: '75px',
                 display: 'flex',
                 alignItems: 'center',
                 padding: '0 1rem',
@@ -384,7 +429,7 @@ export default function Dashboard() {
                 flexShrink: 0
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <img src={univLogo} alt="Mahindra University" style={{ height: '45px' }} />
+                    <img src={univLogo} alt="Mahindra University" style={{ height: '55px' }} />
                     <div style={{ height: '30px', width: '1px', background: '#000000' }}></div>
                     <div>
                         <h1 style={{ fontSize: '1.2rem', margin: 0, color: '#D1202F', lineHeight: 1, letterSpacing: '-0.02em' }}>ECONOVA</h1>
@@ -403,7 +448,7 @@ export default function Dashboard() {
                         <div style={{ border: '1px solid #D1202F', padding: '0.1rem 0.4rem', color: '#D1202F', fontSize: '0.7rem', fontWeight: 700 }}>ADMIN</div>
                     )}
                     <div style={{ height: '30px', width: '1px', background: '#E5E7EB' }}></div>
-                    <img src={clubLogo} alt="Finance Club" style={{ height: '45px' }} />
+                    <img src={clubLogo} alt="Finance Club" style={{ height: '55px' }} />
                 </div>
             </header>
 
@@ -418,6 +463,7 @@ export default function Dashboard() {
                     display: 'flex',
                     flexDirection: 'column',
                     padding: '1.5rem 1rem',
+                    paddingBottom: '2.5rem', /* Extra padding to ensure logout button doesn't hide behind iPad bottom edge */
                     flexShrink: 0,
                     overflowY: 'auto'
                 }}>
@@ -562,6 +608,18 @@ export default function Dashboard() {
                                     <div>
                                         <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Admin Control Panel</h2>
 
+                                        {/* Leaderboard */}
+                                        <div style={{
+                                            background: '#fff',
+                                            border: '1px solid #f0f0f0',
+                                            borderRadius: '16px',
+                                            padding: '1.5rem',
+                                            marginBottom: '2rem',
+                                            boxShadow: '0 2px 12px rgba(0,0,0,0.05)'
+                                        }}>
+                                            <AdminLeaderboard />
+                                        </div>
+
                                         {/* Login Status Monitor */}
                                         <div style={{ marginBottom: '2rem' }}>
                                             <LoginStatus />
@@ -575,6 +633,68 @@ export default function Dashboard() {
 
                                         <div style={{ marginBottom: '2rem' }}>
                                             <DataExport />
+                                        </div>
+
+                                        {/* Trade Approval Toggle + Migration */}
+                                        <div className="fintech-card" style={{ marginBottom: '2rem', background: '#FFF' }}>
+                                            <div className="text-label" style={{ marginBottom: '1rem' }}>MARKET ACCESS CONTROLS</div>
+                                            <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                                                <button
+                                                    id="toggle-trade-approval"
+                                                    onClick={handleToggleTradeApproval}
+                                                    style={{
+                                                        padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem',
+                                                        border: '2px solid',
+                                                        borderColor: marketState?.trade_requires_approval ? '#10B981' : '#6B7280',
+                                                        background: marketState?.trade_requires_approval ? '#D1FAE5' : '#F3F4F6',
+                                                        color: marketState?.trade_requires_approval ? '#059669' : '#374151',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {marketState?.trade_requires_approval ? '✅ TRADE APPROVAL: ON' : '⬜ TRADE APPROVAL: OFF'}
+                                                </button>
+                                                <span style={{ fontSize: '0.75rem', color: '#6B7280' }}>
+                                                    {marketState?.trade_requires_approval
+                                                        ? 'All private trades require admin approval before execution.'
+                                                        : 'Trades execute instantly when both parties agree.'}
+                                                </span>
+                                                <button
+                                                    id="toggle-credit-facility"
+                                                    onClick={handleToggleCreditFacility}
+                                                    style={{
+                                                        padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem',
+                                                        border: '2px solid',
+                                                        borderColor: marketState?.credit_facility_open ? '#3B82F6' : '#6B7280',
+                                                        background: marketState?.credit_facility_open ? '#DBEAFE' : '#F3F4F6',
+                                                        color: marketState?.credit_facility_open ? '#1D4ED8' : '#374151',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {marketState?.credit_facility_open ? '✅ CREDIT FACILITY: OPEN' : '🔒 CREDIT FACILITY: LOCKED'}
+                                                </button>
+                                                <button
+                                                    id="migrate-assets-btn"
+                                                    onClick={handleMigrateAssets}
+                                                    style={{
+                                                        marginLeft: 'auto', padding: '0.5rem 0.9rem', fontSize: '0.75rem',
+                                                        fontWeight: 700, border: '1px solid #9CA3AF',
+                                                        background: '#F9FAFB', color: '#374151', cursor: 'pointer'
+                                                    }}
+                                                    title="One-time rename: TECH→NVDA, OIL→BRENT, REAL→REITS"
+                                                >
+                                                    MIGRATE ASSETS (1×)
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {/* Trade Approval Queue */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminTradeApprovals lastUpdate={lastUpdate} />
+                                        </div>
+
+                                        {/* Loan Approval Queue */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminLoanApprovals />
                                         </div>
 
                                         {/* Existing Team Management */}
@@ -737,7 +857,7 @@ export default function Dashboard() {
                                 )}
 
                                 {activeTab === 'credit' && (
-                                    <CreditNetwork user={user} />
+                                    <CreditNetwork user={user} marketState={marketState} />
                                 )}
 
                                 {activeTab === 'news' && (

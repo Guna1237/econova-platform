@@ -10,13 +10,13 @@ export default function PrivateTrading({ user, marketState, assets }) {
     const [teams, setTeams] = useState([]);
     const [loading, setLoading] = useState(false);
 
-    // New Offer Form State
     const [formData, setFormData] = useState({
         asset_ticker: '',
         offer_type: 'BUY',
         quantity: '',
         price_per_unit: '',
-        to_username: ''
+        to_username: '',
+        listing_type: 'FIXED'
     });
 
     const fetchData = async () => {
@@ -56,7 +56,8 @@ export default function PrivateTrading({ user, marketState, assets }) {
                 ...formData,
                 to_username: formData.to_username || null,
                 quantity: parseInt(formData.quantity),
-                price_per_unit: parseFloat(formData.price_per_unit)
+                price_per_unit: parseFloat(formData.price_per_unit),
+                listing_type: (!formData.to_username && formData.offer_type === 'SELL') ? formData.listing_type : 'FIXED'
             };
 
             await createPrivateOffer(payload);
@@ -104,11 +105,21 @@ export default function PrivateTrading({ user, marketState, assets }) {
                         NEW OFFER
                     </button>
                     <button
+                        onClick={() => setActiveTab('open_market')}
+                        className={activeTab === 'open_market' ? 'btn btn-primary' : 'btn'}
+                        style={activeTab !== 'open_market' ? { background: '#FFF', border: '1px solid #E5E7EB' } : {}}
+                    >
+                        OPEN MARKET {offers.open_market?.length > 0 ? `(${offers.open_market.length})` : ''}
+                    </button>
+                    <button
                         onClick={() => setActiveTab('my_offers')}
                         className={activeTab === 'my_offers' ? 'btn btn-primary' : 'btn'}
                         style={activeTab !== 'my_offers' ? { background: '#FFF', border: '1px solid #E5E7EB' } : {}}
                     >
-                        OFFERS ({offers.received.length + offers.sent.length})
+                        {(() => {
+                            const pendingCount = offers.received.filter(o => o.status === 'pending').length;
+                            return pendingCount > 0 ? `OFFERS (${pendingCount})` : 'OFFERS';
+                        })()}
                     </button>
                     <button
                         onClick={() => setActiveTab('history')}
@@ -225,6 +236,51 @@ export default function PrivateTrading({ user, marketState, assets }) {
                             </p>
                         </div>
 
+                        {!formData.to_username && formData.offer_type === 'SELL' && (
+                            <div style={{ marginBottom: '1.5rem', background: '#F9FAFB', padding: '1.5rem', border: '1px solid #E5E7EB' }}>
+                                <label className="text-label" style={{ display: 'block', marginBottom: '1rem' }}>LISTING METHOD</label>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                    <label style={{
+                                        display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
+                                        padding: '1rem', border: formData.listing_type === 'FIXED' ? '2px solid #000' : '1px solid #D1D5DB',
+                                        background: '#FFF', cursor: 'pointer'
+                                    }}>
+                                        <input
+                                            type="radio"
+                                            name="listing_type"
+                                            value="FIXED"
+                                            checked={formData.listing_type === 'FIXED'}
+                                            onChange={(e) => setFormData({ ...formData, listing_type: e.target.value })}
+                                            style={{ marginTop: '0.25rem' }}
+                                        />
+                                        <div>
+                                            <div style={{ fontWeight: 700 }}>Fixed Price Board</div>
+                                            <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>List on the Open Market for any team to buy instantly at your specified price.</div>
+                                        </div>
+                                    </label>
+
+                                    <label style={{
+                                        display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
+                                        padding: '1rem', border: formData.listing_type === 'AUCTION' ? '2px solid #000' : '1px solid #D1D5DB',
+                                        background: '#FFF', cursor: 'pointer'
+                                    }}>
+                                        <input
+                                            type="radio"
+                                            name="listing_type"
+                                            value="AUCTION"
+                                            checked={formData.listing_type === 'AUCTION'}
+                                            onChange={(e) => setFormData({ ...formData, listing_type: e.target.value })}
+                                            style={{ marginTop: '0.25rem' }}
+                                        />
+                                        <div>
+                                            <div style={{ fontWeight: 700 }}>Auction House</div>
+                                            <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.25rem' }}>Send to the main auction. <span style={{ color: '#D1202F', fontWeight: 600 }}>FEE: 20% tax on capital gains (or mandatory $500 listing fee if sold at a loss/cancelled).</span> Admin controls when this lot goes live.</div>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+                        )}
+
                         <div style={{
                             background: '#F9FAFB', padding: '1rem', marginBottom: '1.5rem',
                             borderLeft: '4px solid #000', fontSize: '0.9rem'
@@ -244,6 +300,53 @@ export default function PrivateTrading({ user, marketState, assets }) {
                             {loading ? 'CREATING...' : 'CREATE PRIVATE OFFER'}
                         </button>
                     </form>
+                )}
+
+                {activeTab === 'open_market' && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                        <div>
+                            <h3 style={{ borderBottom: '2px solid #000', paddingBottom: '0.5rem', marginBottom: '1rem' }}>OPEN MARKET (AVAILABLE TO ANYONE)</h3>
+                            {!offers.open_market || offers.open_market.length === 0 ? (
+                                <p style={{ color: '#666', fontStyle: 'italic' }}>No open offers available right now.</p>
+                            ) : (
+                                <div style={{ display: 'grid', gap: '1rem' }}>
+                                    {offers.open_market.map(offer => (
+                                        <div key={offer.id} style={{ border: '1px solid #E5E7EB', padding: '1rem', background: '#FFF' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                                                <div>
+                                                    <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.25rem', fontWeight: 600 }}>
+                                                        OFFER FROM TEAM #{offer.from_user_id}
+                                                    </div>
+                                                    <span style={{
+                                                        background: offer.offer_type === 'buy' ? '#D1202F' : '#10B981',
+                                                        color: '#FFF', padding: '0.2rem 0.5rem', fontSize: '0.75rem', fontWeight: 700
+                                                    }}>
+                                                        THEY WANT TO {offer.offer_type.toUpperCase()}
+                                                    </span>
+                                                    <div style={{ marginTop: '0.5rem', fontWeight: 600 }}>
+                                                        {offer.quantity}x {offer.asset_ticker} @ ${offer.price_per_unit}
+                                                    </div>
+                                                </div>
+                                                <div className="mono-num" style={{ fontSize: '1.2rem', fontWeight: 700 }}>
+                                                    ${offer.total_value.toLocaleString()}
+                                                </div>
+                                            </div>
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                                                <button
+                                                    onClick={() => handleAccept(offer.id)}
+                                                    className="btn"
+                                                    disabled={!marketState?.marketplace_open}
+                                                    style={{ background: '#000', color: '#FFF', padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+                                                >
+                                                    ACCEPT DEAL
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 )}
 
                 {activeTab === 'my_offers' && (
@@ -342,6 +445,9 @@ export default function PrivateTrading({ user, marketState, assets }) {
 
                 {activeTab === 'history' && (
                     <div style={{ overflowX: 'auto' }}>
+                        <h3 style={{ borderBottom: '2px solid #000', paddingBottom: '0.5rem', marginBottom: '1rem', color: '#000' }}>
+                            TRANSACTION HISTORY
+                        </h3>
                         <table style={{ width: '100%', fontSize: '0.9rem' }}>
                             <thead>
                                 <tr style={{ background: '#000', color: '#FFF' }}>

@@ -8,7 +8,7 @@ from .database import create_db_and_tables, get_session, engine
 from .engine import MarketEngine
 from fastapi.security import OAuth2PasswordRequestForm
 from .auth import create_access_token, get_current_admin, get_current_user, get_active_user, get_password_hash, verify_password, validate_password_strength, ACCESS_TOKEN_EXPIRE_MINUTES
-from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot, PrivateOffer, Transaction, OfferStatus, NewsItem
+from .models import Asset, MarketState, Order, User, Role, TeamLoan, AuctionBid, Holding, OrderType, PriceHistory, ConsentRecord, TeamLeaderInfo, ActivityLog, AuctionLot, PrivateOffer, Transaction, OfferStatus, NewsItem, TradeApproval, TradeApprovalStatus, LoanApproval, LoanApprovalStatus, LoanStatus
 from .activity_logger import ActivityLogger
 from .admin_tools import AdminTools
 from pydantic import BaseModel, EmailStr, field_validator
@@ -18,11 +18,42 @@ import os
 import json
 import logging
 import secrets
+import time as _time
 
 logger = logging.getLogger(__name__)
 
+# ─── In-memory TTL cache for hot read-only endpoints ────────────────────────
+# Serves market state and asset lists from RAM instead of hitting SQLite
+# on every poll from every device. Cache is invalidated on state changes.
+class _TTLCache:
+    def __init__(self, ttl_seconds: float = 2.0):
+        self._data = None
+        self._expires = 0.0
+        self._ttl = ttl_seconds
+
+    def get(self):
+        if _time.monotonic() < self._expires:
+            return self._data
+        return None
+
+    def set(self, value):
+        self._data = value
+        self._expires = _time.monotonic() + self._ttl
+
+    def invalidate(self):
+        self._expires = 0.0
+
+_market_state_cache = _TTLCache(ttl_seconds=2.0)
+_assets_cache = _TTLCache(ttl_seconds=2.0)
+
+def _invalidate_read_caches():
+    """Call this after any write that changes market state or asset prices."""
+    _market_state_cache.invalidate()
+    _assets_cache.invalidate()
+
+
 # Valid tickers for whitelisting
-VALID_TICKERS = {'GOLD', 'TECH', 'OIL', 'REAL', 'TBILL'}
+VALID_TICKERS = {'GOLD', 'NVDA', 'BRENT', 'REITS', 'TBILL'}
 
 # --- Pydantic Schemas for Requests ---
 class BidCreate(BaseModel):
@@ -48,12 +79,13 @@ class LoanOfferCreate(BaseModel):
         return v
 
 class PrivateOfferCreate(BaseModel):
-    to_username: Optional[str] = None
+    to_username: Optional[str] = None # empty means open market
     asset_ticker: str
-    offer_type: str
+    offer_type: str # buy/sell
     quantity: int
     price_per_unit: float
     message: Optional[str] = None
+    listing_type: Optional[str] = "FIXED"  # FIXED or AUCTION (for open sell offers)
 
 class ShockTrigger(BaseModel):
     type: Literal['INFLATION', 'RECESSION']
@@ -98,6 +130,13 @@ class PriceNudge(BaseModel):
 class AdminCredUpdate(BaseModel):
     new_username: Optional[str] = None
     new_password: Optional[str] = None
+
+class CashAdjustment(BaseModel):
+    amount: float
+    reason: Optional[str] = None
+
+class TradeApprovalAction(BaseModel):
+    admin_note: Optional[str] = None
 
 class ActivityLogRequest(BaseModel):
     action_type: str
@@ -184,9 +223,10 @@ environment = os.getenv("ENVIRONMENT", "development")
 # Allow all origins for now to fix WebSocket connectivity issues between Vercel and Render
 allow_origins = ["*"]
 
+# Add CORS middleware with specific allowed origins for credential support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origin_regex="http://.*", # Allow any http origin for local network/dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -244,8 +284,14 @@ def health_check(): return {"status": "healthy"}
 
 @app.post("/token")
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+    logger.info(f"Login attempt for user: {form_data.username}")
     user = session.exec(select(User).where(User.username == form_data.username)).first()
-    if not user or not verify_password(form_data.password, user.hashed_password):
+    if not user:
+        logger.warning(f"Login failed: User {form_data.username} not found")
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+        
+    if not verify_password(form_data.password, user.hashed_password):
+        logger.warning(f"Login failed: Incorrect password for user {form_data.username}")
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
     # Update last login time and generate new session ID
@@ -254,6 +300,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     session.add(user)
     session.commit()
     
+    logger.info(f"Login successful for user: {form_data.username} (Role: {user.role})")
     access_token = create_access_token(data={"sub": user.username, "sid": user.session_id})
     return {
         "access_token": access_token,
@@ -279,12 +326,22 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 
 @app.get("/market/state")
 def get_state(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    cached = _market_state_cache.get()
+    if cached is not None:
+        return cached
     sim = MarketEngine(session)
-    return sim.get_state()
+    result = sim.get_state()
+    _market_state_cache.set(result)
+    return result
 
 @app.get("/market/assets")
 def get_assets(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    return session.exec(select(Asset)).all()
+    cached = _assets_cache.get()
+    if cached is not None:
+        return cached
+    result = session.exec(select(Asset)).all()
+    _assets_cache.set(result)
+    return result
 
 @app.get("/users/me")
 def get_me(user: User = Depends(get_current_user)):
@@ -349,6 +406,38 @@ def register(data: UserRegister, admin: User = Depends(get_current_admin), sessi
 def get_all_users(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     return session.exec(select(User).where(User.role == Role.TEAM)).all()
 
+@app.get("/admin/leaderboard")
+def get_leaderboard(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Return ranked team leaderboard with net worth breakdown."""
+    teams = session.exec(select(User).where(User.role == Role.TEAM)).all()
+    assets = session.exec(select(Asset)).all()
+    asset_map = {a.id: a for a in assets}
+
+    result = []
+    for team in teams:
+        holdings = session.exec(select(Holding).where(Holding.user_id == team.id)).all()
+        portfolio_value = sum(
+            h.quantity * asset_map[h.asset_id].current_price
+            for h in holdings
+            if h.asset_id in asset_map
+        )
+        net_worth = team.cash + portfolio_value - team.debt
+        result.append({
+            "id": team.id,
+            "username": team.username,
+            "cash": team.cash,
+            "portfolio_value": round(portfolio_value, 2),
+            "debt": team.debt,
+            "net_worth": round(net_worth, 2),
+            "is_frozen": team.is_frozen,
+        })
+
+    result.sort(key=lambda x: x["net_worth"], reverse=True)
+    for i, entry in enumerate(result):
+        entry["rank"] = i + 1
+    return result
+
+
 @app.post("/admin/users/create")
 def create_team_user(data: UserRegister, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     validate_password_strength(data.password)
@@ -396,6 +485,10 @@ def get_live_bids(user: User = Depends(get_current_user), session: Session = Dep
 
 @app.post("/loans/offer")
 async def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
+    # Check credit facility
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.credit_facility_open:
+        raise HTTPException(status_code=400, detail="Credit facility is currently locked by admin")
     borrower = session.exec(select(User).where(User.username == offer.borrower_username)).first()
     if not borrower: raise HTTPException(status_code=404, detail="User not found")
     if user.cash < offer.principal: raise HTTPException(status_code=400, detail="Insufficient funds")
@@ -414,27 +507,28 @@ async def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_active_use
 
 @app.post("/loans/accept/{loan_id}")
 async def accept_loan(loan_id: int, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
+    # Check credit facility
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.credit_facility_open:
+        raise HTTPException(status_code=400, detail="Credit facility is currently locked by admin")
     loan = session.get(TeamLoan, loan_id)
     if not loan or loan.borrower_id != user.id: raise HTTPException(status_code=404, detail="Loan not found")
     if loan.status != "pending": raise HTTPException(status_code=400, detail="Loan not pending")
     
+    # Check if already queued for approval
+    existing_approval = session.exec(select(LoanApproval).where(LoanApproval.loan_id == loan_id)).first()
+    if existing_approval and existing_approval.status == LoanApprovalStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Loan acceptance is already awaiting admin approval")
+    
     lender = session.get(User, loan.lender_id)
     if lender.cash < loan.principal: raise HTTPException(status_code=400, detail="Lender funds unavailable")
     
-    lender.cash -= loan.principal
-    user.cash += loan.principal
-    user.debt += loan.principal
-    loan.status = "active"
-    if loan.remaining_balance == 0:  # Initialize if not set
-        loan.remaining_balance = loan.principal
-    
-    session.add(lender)
-    session.add(user)
-    session.add(loan)
-    session.add(loan)
+    # Queue for admin approval instead of executing immediately
+    approval = LoanApproval(loan_id=loan_id)
+    session.add(approval)
     session.commit()
-    await ws_manager.broadcast("market_update", {"action": "loan_accepted", "loan_id": loan.id})
-    return {"message": "Loan accepted"}
+    await ws_manager.broadcast("market_update", {"action": "loan_pending_approval", "loan_id": loan.id})
+    return {"message": "Loan acceptance submitted for admin approval", "approval_required": True}
 
 @app.get("/loans/pending")
 def get_pending_loans(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
@@ -488,7 +582,7 @@ class RepaymentRequest(BaseModel):
     amount: float
 
 @app.post("/loans/repay")
-async def repay_loan(req: RepaymentRequest, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
+async def repay_loan(req: RepaymentRequest, user: User = Depends(get_current_user), session: Session = Depends(get_session)):  # Use get_current_user so frozen teams CAN repay
     """Make a partial or full repayment on a loan"""
     loan = session.get(TeamLoan, req.loan_id)
     if not loan or loan.borrower_id != user.id:
@@ -511,15 +605,20 @@ async def repay_loan(req: RepaymentRequest, user: User = Depends(get_active_user
     
     # Check if fully repaid
     if loan.remaining_balance <= 0:
+        was_defaulted = loan.status == "defaulted"
         loan.status = "closed"
         loan.remaining_balance = 0
-        message = f"Loan fully repaid! Total: ${loan.total_repaid:,.2f}"
+        user.debt = max(0.0, user.debt)  # Clamp to 0, never negative
+        # Unfreeze if team was frozen owing to this loan default
+        if user.is_frozen and was_defaulted:
+            user.is_frozen = False
+        message = f"Loan fully repaid! Total: ${loan.total_repaid:,.2f}." + (" Account unfrozen." if was_defaulted else "")
     else:
+        user.debt = max(0.0, user.debt)  # Clamp to 0, never negative
         message = f"Repaid ${req.amount:,.2f}. Remaining: ${loan.remaining_balance:,.2f}"
     
     session.add(user)
     session.add(lender)
-    session.add(loan)
     session.add(loan)
     session.commit()
     
@@ -706,6 +805,44 @@ async def create_private_offer(
     # Create offer
     otype = OrderType.BUY if offer.offer_type.upper() == "BUY" else OrderType.SELL
     
+    # --- AUCTION ROUTING ---
+    if not offer.to_username and offer.offer_type.upper() == "SELL" and offer.listing_type == "AUCTION":
+        # Create user auction lot
+        try:
+            # Escrow the asset from holding
+            holding.quantity -= offer.quantity
+            self_cost_basis = holding.avg_cost
+            if holding.quantity == 0:
+                session.delete(holding)
+            else:
+                session.add(holding)
+                
+            # Find next lot number
+            existing_lots = session.exec(select(AuctionLot).where(AuctionLot.asset_ticker == offer.asset_ticker)).all()
+            next_lot_num = max([l.lot_number for l in existing_lots]) + 1 if existing_lots else 1
+            
+            new_lot = AuctionLot(
+                asset_ticker=offer.asset_ticker,
+                lot_number=next_lot_num,
+                quantity=offer.quantity,
+                base_price=offer.price_per_unit,
+                status=LotStatus.PENDING,
+                seller_id=user.id,
+                seller_cost_basis=self_cost_basis
+            )
+            
+            session.add(new_lot)
+            session.commit()
+            
+            logger.info(f"User {user.username} created auction lot {next_lot_num} for {offer.quantity} {offer.asset_ticker}")
+            # Refresh auction table if anyone is looking at it
+            await ws_manager.broadcast("market_update", {"action": "auction_lot_created"})
+            return {"message": "Listed on Auction House successfully", "lot_id": new_lot.id}
+        except Exception as e:
+            logger.error(f"Error creating user auction: {e}")
+            raise HTTPException(status_code=500, detail="Failed to list on auction")
+            
+    # --- NORMAL PRIVATE/OPEN OFFER ---
     try:
         new_offer = PrivateOffer(
             from_user_id=user.id,
@@ -722,7 +859,7 @@ async def create_private_offer(
         session.add(new_offer)
         session.commit()
         
-        await ws_manager.broadcast("market_update", {"action": "offer_created", "from": user.username})
+        await ws_manager.broadcast("market_update", {"action": "offer_created", "from": user.username, "to": offer.to_username})
         return {"message": "Offer created successfully", "offer_id": new_offer.id}
     except Exception as e:
         logger.error(f"Error creating private offer: {e}")
@@ -752,7 +889,7 @@ def get_my_offers(user: User = Depends(get_current_user), session: Session = Dep
 
 @app.post("/offers/{offer_id}/accept")
 async def accept_offer(offer_id: int, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
-    """Accept a pending offer"""
+    """Accept a pending offer (or queue for admin approval if approval mode is on)"""
     # Check market open
     state = session.exec(select(MarketState)).first()
     if not state or not state.marketplace_open:
@@ -771,6 +908,32 @@ async def accept_offer(offer_id: int, user: User = Depends(get_active_user), ses
         
     if offer.from_user_id == user.id:
         raise HTTPException(status_code=400, detail="Cannot accept your own offer")
+
+    # ── APPROVAL GATE ────────────────────────────────────────────────────────
+    if state.trade_requires_approval:
+        # Check if approval already queued
+        existing_approval = session.exec(
+            select(TradeApproval).where(TradeApproval.offer_id == offer_id)
+        ).first()
+        if existing_approval:
+            raise HTTPException(status_code=400, detail="This trade is already awaiting admin approval")
+            
+        # Lock open offer to the accepting user so admin knows who the counterparty is
+        if not offer.to_user_id:
+            offer.to_user_id = user.id
+            session.add(offer)
+            
+        approval = TradeApproval(offer_id=offer_id)
+        session.add(approval)
+        session.commit()
+        await ws_manager.broadcast("market_update", {"action": "trade_pending_approval", "offer_id": offer_id})
+        return {"message": "Trade submitted for admin approval", "approval_required": True}
+    # ── END APPROVAL GATE ────────────────────────────────────────────────────
+        
+    # Lock open offer to the accepting user for execution tracking
+    if not offer.to_user_id:
+        offer.to_user_id = user.id
+        session.add(offer)
         
     # Execute Trade
     buyer_id = None
@@ -807,14 +970,14 @@ async def accept_offer(offer_id: int, user: User = Depends(get_active_user), ses
     
     buyer_holding = session.exec(select(Holding).where(Holding.user_id == buyer.id, Holding.asset_id == asset.id)).first()
     if not buyer_holding:
-        buyer_holding = Holding(user_id=buyer.id, asset_id=asset.id, quantity=0, average_cost=0)
+        buyer_holding = Holding(user_id=buyer.id, asset_id=asset.id, quantity=0, avg_cost=0)
         session.add(buyer_holding)
         
     # Update average cost
-    current_val = buyer_holding.quantity * buyer_holding.average_cost
+    current_val = buyer_holding.quantity * buyer_holding.avg_cost
     new_val = current_val + total_cost
     buyer_holding.quantity += offer.quantity
-    buyer_holding.average_cost = new_val / buyer_holding.quantity
+    buyer_holding.avg_cost = new_val / buyer_holding.quantity if buyer_holding.quantity > 0 else offer.price_per_unit
     
     # Update Offer Status
     offer.status = OfferStatus.ACCEPTED
@@ -827,8 +990,7 @@ async def accept_offer(offer_id: int, user: User = Depends(get_active_user), ses
         asset_ticker=offer.asset_ticker,
         quantity=offer.quantity,
         price_per_unit=offer.price_per_unit,
-        total_value=total_cost,
-        offer_id=offer.id
+        total_value=total_cost
     )
     
     session.add(buyer)
@@ -942,12 +1104,34 @@ async def open_auction(ticker: str, user: User = Depends(get_current_admin), ses
 
 @app.post("/admin/auction/resolve")
 async def resolve_auction_endpoint(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Hammer down — closes current active lot. Does NOT auto-advance to next lot."""
     sim = MarketEngine(session)
     logger = ActivityLogger(session)
-    msg = sim.resolve_auction()
-    logger.log_action(user_id=user.id, action_type="ADMIN_RESOLVE_AUCTION", action_details={"result": msg})
-    await ws_manager.broadcast("auction_update", {"action": "resolved", "result": msg})
-    return {"message": msg}
+    result = sim.resolve_auction()
+    logger.log_action(user_id=user.id, action_type="ADMIN_RESOLVE_LOT", action_details=result)
+    await ws_manager.broadcast("auction_update", {"action": "lot_resolved", "result": result})
+    return result
+
+@app.post("/admin/auction/next-lot")
+async def open_next_lot_endpoint(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Admin manually opens the next pending lot for bidding."""
+    sim = MarketEngine(session)
+    logger = ActivityLogger(session)
+    result = sim.open_next_lot()
+    logger.log_action(user_id=user.id, action_type="ADMIN_OPEN_NEXT_LOT", action_details=result)
+    if result.get("opened"):
+        await ws_manager.broadcast("auction_update", {"action": "next_lot_opened", "lot_number": result.get("lot_number")})
+    return result
+
+@app.post("/admin/auction/end")
+async def end_auction_endpoint(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Admin manually ends the auction and returns market to TRADING phase."""
+    sim = MarketEngine(session)
+    logger = ActivityLogger(session)
+    result = sim.end_auction()
+    logger.log_action(user_id=user.id, action_type="ADMIN_END_AUCTION", action_details=result)
+    await ws_manager.broadcast("auction_update", {"action": "auction_ended"})
+    return result
 
 @app.post("/admin/reset-prices")
 def reset_asset_prices(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
@@ -1471,3 +1655,509 @@ def check_consent_status(
     has_consented = user.has_consented or (record is not None)
     
     return {"has_consented": has_consented}
+
+
+# ============ NEW ADMIN CONTROL ENDPOINTS ============
+
+@app.post("/admin/teams/{team_id}/add-cash")
+async def admin_add_cash(
+    team_id: int,
+    body: CashAdjustment,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Grant additional capital (cap) to a specific team"""
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+    team = session.get(User, team_id)
+    if not team or team.role != Role.TEAM:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    team.cash += body.amount
+    session.add(team)
+
+    act_logger = ActivityLogger(session)
+    act_logger.log_action(user_id=user.id, action_type="ADMIN_ADD_CASH", action_details={
+        "team_id": team_id, "team": team.username, "amount": body.amount, "reason": body.reason or ""
+    })
+
+    session.commit()
+    await ws_manager.broadcast("market_update", {"action": "cash_added", "team": team.username, "amount": body.amount})
+    return {"message": f"Added ${body.amount:,.2f} to {team.username}", "new_balance": team.cash}
+
+
+@app.post("/admin/teams/{team_id}/penalty")
+async def admin_penalty(
+    team_id: int,
+    body: CashAdjustment,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Deduct a penalty from a team's cash balance (floors at $0)"""
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Penalty amount must be positive")
+    team = session.get(User, team_id)
+    if not team or team.role != Role.TEAM:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    deducted = min(body.amount, team.cash)  # floor at 0
+    team.cash = max(0.0, team.cash - body.amount)
+    session.add(team)
+
+    act_logger = ActivityLogger(session)
+    act_logger.log_action(user_id=user.id, action_type="ADMIN_PENALTY", action_details={
+        "team_id": team_id, "team": team.username, "amount": body.amount, "deducted": deducted, "reason": body.reason or ""
+    })
+
+    session.commit()
+    await ws_manager.broadcast("market_update", {"action": "penalty_applied", "team": team.username, "amount": deducted})
+    return {"message": f"Penalty of ${deducted:,.2f} applied to {team.username}", "new_balance": team.cash}
+
+
+@app.post("/admin/market/toggle-trade-approval")
+async def toggle_trade_approval(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Toggle whether private trades require admin approval before executing"""
+    state = session.exec(select(MarketState)).first()
+    state.trade_requires_approval = not state.trade_requires_approval
+    session.add(state)
+    session.commit()
+    status = "ENABLED" if state.trade_requires_approval else "DISABLED"
+    await ws_manager.broadcast("market_update", {"action": "trade_approval_toggled", "enabled": state.trade_requires_approval})
+    return {"message": f"Trade approval mode {status}", "trade_requires_approval": state.trade_requires_approval}
+
+
+@app.get("/admin/trade-approvals")
+def get_trade_approvals(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """List all trade approvals (pending and resolved)"""
+    approvals = session.exec(
+        select(TradeApproval).order_by(TradeApproval.created_at.desc())
+    ).all()
+
+    result = []
+    for approval in approvals:
+        offer = session.get(PrivateOffer, approval.offer_id)
+        if not offer:
+            continue
+        from_user = session.get(User, offer.from_user_id)
+        to_user = session.get(User, offer.to_user_id) if offer.to_user_id else None
+        result.append({
+            "id": approval.id,
+            "offer_id": approval.offer_id,
+            "status": approval.status,
+            "admin_note": approval.admin_note,
+            "created_at": approval.created_at,
+            "resolved_at": approval.resolved_at,
+            "resolved_by": approval.resolved_by,
+            # Offer details
+            "asset_ticker": offer.asset_ticker,
+            "offer_type": offer.offer_type,
+            "quantity": offer.quantity,
+            "price_per_unit": offer.price_per_unit,
+            "total_value": offer.total_value,
+            "from_username": from_user.username if from_user else "Unknown",
+            "to_username": to_user.username if to_user else "Open Market",
+            "message": offer.message,
+        })
+    return result
+
+
+@app.post("/admin/trade-approvals/{approval_id}/approve")
+async def approve_trade(
+    approval_id: int,
+    body: TradeApprovalAction,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Approve a pending trade — executes the underlying offer"""
+    approval = session.get(TradeApproval, approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval record not found")
+    if approval.status != TradeApprovalStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Trade is already {approval.status}")
+
+    offer = session.get(PrivateOffer, approval.offer_id)
+    if not offer or offer.status != OfferStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Offer is no longer pending")
+
+    asset = session.exec(select(Asset).where(Asset.ticker == offer.asset_ticker)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    # Determine buyer / seller
+    if offer.offer_type == OrderType.SELL:
+        seller_id, buyer_id = offer.from_user_id, offer.to_user_id
+    else:
+        buyer_id, seller_id = offer.from_user_id, offer.to_user_id
+
+    if not buyer_id or not seller_id:
+        raise HTTPException(status_code=400, detail="Cannot approve an open-market offer with no counterparty yet")
+
+    buyer = session.get(User, buyer_id)
+    seller = session.get(User, seller_id)
+    total_cost = offer.total_value
+
+    if not buyer or not seller:
+        raise HTTPException(status_code=400, detail="Buyer or seller not found")
+    if buyer.cash < total_cost:
+        raise HTTPException(status_code=400, detail="Buyer has insufficient cash")
+
+    seller_holding = session.exec(
+        select(Holding).where(Holding.user_id == seller.id, Holding.asset_id == asset.id)
+    ).first()
+    if not seller_holding or seller_holding.quantity < offer.quantity:
+        raise HTTPException(status_code=400, detail="Seller has insufficient assets")
+
+    # Execute Transfer
+    buyer.cash -= total_cost
+    seller.cash += total_cost
+    seller_holding.quantity -= offer.quantity
+
+    buyer_holding = session.exec(
+        select(Holding).where(Holding.user_id == buyer.id, Holding.asset_id == asset.id)
+    ).first()
+    if not buyer_holding:
+        buyer_holding = Holding(user_id=buyer.id, asset_id=asset.id, quantity=0, avg_cost=0)
+        session.add(buyer_holding)
+
+    current_val = buyer_holding.quantity * buyer_holding.avg_cost
+    buyer_holding.quantity += offer.quantity
+    buyer_holding.avg_cost = (current_val + total_cost) / buyer_holding.quantity
+
+    offer.status = OfferStatus.ACCEPTED
+    offer.responded_at = datetime.now(timezone.utc)
+
+    txn = Transaction(
+        buyer_id=buyer.id,
+        seller_id=seller.id,
+        asset_ticker=offer.asset_ticker,
+        quantity=offer.quantity,
+        price_per_unit=offer.price_per_unit,
+        total_value=total_cost
+    )
+
+    approval.status = TradeApprovalStatus.APPROVED
+    approval.admin_note = body.admin_note
+    approval.resolved_at = datetime.now(timezone.utc)
+    approval.resolved_by = user.username
+
+    session.add_all([buyer, seller, seller_holding, buyer_holding, offer, txn, approval])
+    session.commit()
+
+    await ws_manager.broadcast("trade_executed", {
+        "type": "admin_approved_trade", "offer_id": offer.id,
+        "buyer": buyer.username, "seller": seller.username
+    })
+    return {"message": f"Trade approved and executed. Transaction ID: {txn.id}"}
+
+
+@app.post("/admin/trade-approvals/{approval_id}/reject")
+async def reject_trade(
+    approval_id: int,
+    body: TradeApprovalAction,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Reject a pending trade — offer is cancelled"""
+    approval = session.get(TradeApproval, approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval record not found")
+    if approval.status != TradeApprovalStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Trade is already {approval.status}")
+
+    offer = session.get(PrivateOffer, approval.offer_id)
+    if offer:
+        offer.status = OfferStatus.CANCELLED
+        offer.responded_at = datetime.now(timezone.utc)
+        session.add(offer)
+
+    approval.status = TradeApprovalStatus.REJECTED
+    approval.admin_note = body.admin_note
+    approval.resolved_at = datetime.now(timezone.utc)
+    approval.resolved_by = user.username
+    session.add(approval)
+    session.commit()
+
+    await ws_manager.broadcast("market_update", {"action": "trade_rejected", "offer_id": approval.offer_id})
+    return {"message": "Trade rejected. Offer has been cancelled."}
+
+
+# ============ NEW ENDPOINTS ============
+
+# --- USER AUCTION LOTS ---
+
+@app.get("/auction/my-lots")
+def get_my_auction_lots(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    """Get all auction lots listed by the current user (seller)"""
+    lots = session.exec(
+        select(AuctionLot).where(AuctionLot.seller_id == user.id)
+        .order_by(AuctionLot.created_at.desc())
+    ).all()
+    result = []
+    for lot in lots:
+        winner = session.get(User, lot.winner_id) if lot.winner_id else None
+        result.append({
+            **lot.dict(),
+            "winner_username": winner.username if winner else None
+        })
+    return result
+
+
+# --- CREDIT FACILITY CONTROL ---
+
+@app.post("/admin/credit/open")
+async def open_credit_facility(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    state = session.exec(select(MarketState)).first()
+    state.credit_facility_open = True
+    session.add(state)
+    session.commit()
+    await ws_manager.broadcast("market_update", {"action": "credit_opened"})
+    return {"message": "Credit facility opened", "credit_facility_open": True}
+
+
+@app.post("/admin/credit/close")
+async def close_credit_facility(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    state = session.exec(select(MarketState)).first()
+    state.credit_facility_open = False
+    session.add(state)
+    session.commit()
+    await ws_manager.broadcast("market_update", {"action": "credit_closed"})
+    return {"message": "Credit facility locked", "credit_facility_open": False}
+
+
+# --- ADMIN LOAN APPROVALS ---
+
+class LoanApprovalAction(BaseModel):
+    admin_note: Optional[str] = None
+
+
+@app.get("/admin/loan-approvals")
+def get_loan_approvals(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """List all loan approval requests"""
+    approvals = session.exec(select(LoanApproval).order_by(LoanApproval.created_at.desc())).all()
+    result = []
+    for approval in approvals:
+        loan = session.get(TeamLoan, approval.loan_id)
+        if not loan:
+            continue
+        lender = session.get(User, loan.lender_id)
+        borrower = session.get(User, loan.borrower_id)
+        result.append({
+            "id": approval.id,
+            "loan_id": approval.loan_id,
+            "status": approval.status,
+            "admin_note": approval.admin_note,
+            "created_at": approval.created_at,
+            "resolved_at": approval.resolved_at,
+            "resolved_by": approval.resolved_by,
+            "principal": loan.principal,
+            "interest_rate": loan.interest_rate,
+            "lender_username": lender.username if lender else "Unknown",
+            "borrower_username": borrower.username if borrower else "Unknown",
+        })
+    return result
+
+
+@app.post("/admin/loan-approvals/{approval_id}/approve")
+async def approve_loan(approval_id: int, body: LoanApprovalAction, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Approve a loan — executes the cash transfer"""
+    approval = session.get(LoanApproval, approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status != LoanApprovalStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Approval is already {approval.status}")
+    
+    loan = session.get(TeamLoan, approval.loan_id)
+    if not loan or loan.status != "pending":
+        raise HTTPException(status_code=400, detail="Loan is no longer pending")
+    
+    lender = session.get(User, loan.lender_id)
+    borrower = session.get(User, loan.borrower_id)
+    
+    if not lender or not borrower:
+        raise HTTPException(status_code=404, detail="Lender or borrower not found")
+    if lender.cash < loan.principal:
+        raise HTTPException(status_code=400, detail="Lender has insufficient funds")
+    
+    # Execute transfer
+    lender.cash -= loan.principal
+    borrower.cash += loan.principal
+    borrower.debt += loan.principal
+    loan.status = "active"
+    if loan.remaining_balance == 0:
+        loan.remaining_balance = loan.principal
+    
+    approval.status = LoanApprovalStatus.APPROVED
+    approval.admin_note = body.admin_note
+    approval.resolved_at = datetime.now(timezone.utc)
+    approval.resolved_by = user.username
+    
+    session.add_all([lender, borrower, loan, approval])
+    session.commit()
+    
+    await ws_manager.broadcast("market_update", {"action": "loan_approved", "loan_id": loan.id})
+    return {"message": f"Loan of ${loan.principal:,.2f} approved. Funds transferred to {borrower.username}."}
+
+
+@app.post("/admin/loan-approvals/{approval_id}/reject")
+async def reject_loan(approval_id: int, body: LoanApprovalAction, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Reject a loan approval — loan reverts to pending status"""
+    approval = session.get(LoanApproval, approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if approval.status != LoanApprovalStatus.PENDING:
+        raise HTTPException(status_code=400, detail=f"Approval is already {approval.status}")
+    
+    approval.status = LoanApprovalStatus.REJECTED
+    approval.admin_note = body.admin_note
+    approval.resolved_at = datetime.now(timezone.utc)
+    approval.resolved_by = user.username
+    session.add(approval)
+    session.commit()
+    
+    await ws_manager.broadcast("market_update", {"action": "loan_rejected", "loan_id": approval.loan_id})
+    return {"message": "Loan rejected"}
+
+
+# --- ADMIN TEAM PORTFOLIO VIEW ---
+
+@app.get("/admin/teams/{team_id}/portfolio")
+def get_team_portfolio(team_id: int, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get full portfolio view for a specific team"""
+    team = session.get(User, team_id)
+    if not team or team.role != Role.TEAM:
+        raise HTTPException(status_code=404, detail="Team not found")
+    
+    # Holdings
+    holdings = session.exec(select(Holding).where(Holding.user_id == team_id)).all()
+    assets = {a.id: a for a in session.exec(select(Asset)).all()}
+    holdings_data = []
+    portfolio_value = 0.0
+    for h in holdings:
+        asset = assets.get(h.asset_id)
+        if asset:
+            mv = h.quantity * asset.current_price
+            portfolio_value += mv
+            holdings_data.append({
+                "ticker": asset.ticker,
+                "name": asset.name,
+                "quantity": h.quantity,
+                "avg_cost": round(h.avg_cost, 2),
+                "current_price": round(asset.current_price, 2),
+                "market_value": round(mv, 2),
+                "unrealized_pnl": round((asset.current_price - h.avg_cost) * h.quantity, 2)
+            })
+    
+    # Active loans
+    loans = session.exec(
+        select(TeamLoan).where(
+            ((TeamLoan.borrower_id == team_id) | (TeamLoan.lender_id == team_id)),
+            TeamLoan.status == "active"
+        )
+    ).all()
+    loans_data = []
+    for loan in loans:
+        lender = session.get(User, loan.lender_id)
+        borrower = session.get(User, loan.borrower_id)
+        loans_data.append({
+            "id": loan.id,
+            "role": "borrower" if loan.borrower_id == team_id else "lender",
+            "counterparty": lender.username if loan.borrower_id == team_id else borrower.username,
+            "principal": loan.principal,
+            "remaining_balance": loan.remaining_balance,
+            "interest_rate": loan.interest_rate,
+            "missed_quarters": loan.missed_quarters,
+        })
+    
+    # Recent activity (last 15)
+    activity = session.exec(
+        select(ActivityLog).where(ActivityLog.user_id == team_id)
+        .order_by(ActivityLog.timestamp.desc()).limit(15)
+    ).all()
+    
+    return {
+        "username": team.username,
+        "cash": round(team.cash, 2),
+        "debt": round(team.debt, 2),
+        "is_frozen": team.is_frozen,
+        "net_worth": round(team.cash + portfolio_value - team.debt, 2),
+        "portfolio_value": round(portfolio_value, 2),
+        "holdings": holdings_data,
+        "loans": loans_data,
+        "recent_activity": [
+            {
+                "action_type": a.action_type,
+                "action_details": a.action_details,
+                "timestamp": a.timestamp
+            } for a in activity
+        ]
+    }
+
+
+# --- ADMIN GLOBAL ACTIVITY FEED ---
+
+@app.get("/admin/activity-feed")
+def get_activity_feed(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get last 50 activity log entries across all teams"""
+    logs = session.exec(
+        select(ActivityLog).order_by(ActivityLog.timestamp.desc()).limit(50)
+    ).all()
+    result = []
+    for log in logs:
+        team = session.get(User, log.user_id)
+        result.append({
+            "id": log.id,
+            "username": team.username if team else "Unknown",
+            "action_type": log.action_type,
+            "action_details": log.action_details,
+            "timestamp": log.timestamp,
+            "duration_ms": log.duration_ms,
+        })
+    return result
+
+
+@app.get("/admin/teams/{team_id}/activity")
+def get_team_activity(team_id: int, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get last 20 activity log entries for a specific team"""
+    logs = session.exec(
+        select(ActivityLog).where(ActivityLog.user_id == team_id)
+        .order_by(ActivityLog.timestamp.desc()).limit(20)
+    ).all()
+    return logs
+
+
+@app.post("/admin/migrate-assets")
+def migrate_asset_tickers(
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """
+    One-time migration: rename old asset tickers to new names.
+    TECH -> NVDA, OIL -> BRENT, REAL -> REITS
+    Safe to run multiple times (idempotent).
+    """
+    RENAMES = {
+        "TECH": ("NVDA", "NVIDIA Growth ETF", "High growth, high risk AI & semiconductor sector."),
+        "OIL": ("BRENT", "S&P Brent Crude Oil", "Cyclical energy commodity benchmarked to Brent crude."),
+        "REAL": ("REITS", "REITs Index", "Real Estate Investment Trust diversified index."),
+    }
+    migrated = []
+    for old_ticker, (new_ticker, new_name, new_desc) in RENAMES.items():
+        asset = session.exec(select(Asset).where(Asset.ticker == old_ticker)).first()
+        if asset:
+            asset.ticker = new_ticker
+            asset.name = new_name
+            asset.description = new_desc
+            session.add(asset)
+            migrated.append(f"{old_ticker} → {new_ticker}")
+
+    session.commit()
+    if migrated:
+        return {"message": f"Migration complete: {', '.join(migrated)}"}
+    return {"message": "Nothing to migrate — tickers are already up to date."}
+

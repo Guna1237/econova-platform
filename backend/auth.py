@@ -11,7 +11,7 @@ from .database import get_session
 from .models import User
 
 # Configuration — use env var in production, generate random fallback for dev
-SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+SECRET_KEY = os.getenv("SECRET_KEY", "econova_super_secret_stable_key_for_development_and_production_unless_overridden")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60  # 1 hour sessions
 

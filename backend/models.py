@@ -86,6 +86,7 @@ class TeamLoan(SQLModel, table=True):
     total_repaid: float = Field(default=0.0)  # Tracks total amount repaid
     interest_rate: float # Percentage per year
     status: LoanStatus = LoanStatus.PENDING
+    missed_quarters: int = Field(default=0)  # Grace period: default after 2 missed
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AuctionBid(SQLModel, table=True):
@@ -116,6 +117,12 @@ class MarketState(SQLModel, table=True):
     
     # Marketplace Control
     marketplace_open: bool = Field(default=False)
+    
+    # Credit Facility Control
+    credit_facility_open: bool = Field(default=False)
+    
+    # Trade Approval Gate
+    trade_requires_approval: bool = Field(default=False)
     
     # Shock System
     shock_stage: str = Field(default="NORMAL") # NORMAL, WARNING, CRASH, RECOVERY
@@ -173,6 +180,8 @@ class AuctionLot(SQLModel, table=True):
     status: LotStatus = Field(default=LotStatus.PENDING)
     winner_id: Optional[int] = Field(default=None, foreign_key="user.id")
     winning_bid: Optional[float] = None
+    seller_id: Optional[int] = Field(default=None, foreign_key="user.id")  # None = system lot
+    seller_cost_basis: Optional[float] = None  # To calculate capital gains
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class AdminCredentials(SQLModel, table=True):
@@ -219,6 +228,21 @@ class NewsItem(SQLModel, table=True):
     image_url: Optional[str] = None
     source: str = Field(default="Global News Network")
 
+class TradeApprovalStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+class TradeApproval(SQLModel, table=True):
+    """Holds pending private trade offers waiting for admin approval"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    offer_id: int = Field(foreign_key="privateoffer.id", unique=True)
+    status: TradeApprovalStatus = Field(default=TradeApprovalStatus.PENDING)
+    admin_note: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None  # admin username
+
 class ActiveEvent(SQLModel, table=True):
     """Tracks ongoing micro-events affecting specific assets"""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -229,3 +253,20 @@ class ActiveEvent(SQLModel, table=True):
     start_year: int
     duration: int
     remaining_years: int
+
+
+class LoanApprovalStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class LoanApproval(SQLModel, table=True):
+    """Admin approval queue for loan acceptances"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    loan_id: int = Field(foreign_key="teamloan.id", unique=True)
+    status: LoanApprovalStatus = Field(default=LoanApprovalStatus.PENDING)
+    admin_note: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None  # admin username

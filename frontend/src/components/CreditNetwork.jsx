@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { getPendingLoans, offerLoan, acceptLoan, getAllTeams, getActiveLoans, repayLoan } from '../services/api';
-import { ArrowRight, Check, X, DollarSign, Users, TrendingDown, AlertTriangle } from 'lucide-react';
+import { ArrowRight, Check, X, DollarSign, Users, TrendingDown, AlertTriangle, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 
-export default function CreditNetwork({ user }) {
+export default function CreditNetwork({ user, marketState }) {
     const [borrower, setBorrower] = useState('');
     const [principal, setPrincipal] = useState(10000);
     const [rate, setRate] = useState(5.0);
@@ -74,8 +74,28 @@ export default function CreditNetwork({ user }) {
         }
     };
 
+    const creditLocked = marketState && !marketState.credit_facility_open;
+
     return (
-        <div className="animate-fade-in" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+        <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            {/* Credit Facility Lock Banner */}
+            {creditLocked && (
+                <div style={{
+                    display: 'flex', alignItems: 'center', gap: '1rem',
+                    padding: '1rem 1.5rem', background: '#FEF3C7', border: '2px solid #D97706',
+                    borderRadius: '4px'
+                }}>
+                    <Lock size={22} color="#D97706" />
+                    <div>
+                        <div style={{ fontWeight: 700, color: '#92400E' }}>Credit Facility Locked</div>
+                        <div style={{ fontSize: '0.85rem', color: '#78350F' }}>
+                            Loan offers and acceptances are currently disabled by the admin. Please wait for the credit facility to open.
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
 
             {/* Left Column: Extend Credit */}
             <div>
@@ -262,6 +282,7 @@ export default function CreditNetwork({ user }) {
                             ))}
                         </div>
                     )}
+                </div>
                 </div>
             </div>
 

@@ -1,14 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Gavel, TrendingUp, AlertCircle, Play, CheckCircle, Package } from 'lucide-react';
-import { getAuctionLots, placeLotBid, openAuction, resolveAuction } from '../services/api';
+import { Gavel, TrendingUp, AlertCircle, Play, CheckCircle, Package, List } from 'lucide-react';
+import { getAuctionLots, placeLotBid, openAuction, resolveAuction, openNextLot, endAuction, getMyAuctionLots } from '../services/api';
 import { toast } from 'sonner';
 
 export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }) {
     const [lots, setLots] = useState([]);
+    const [myLots, setMyLots] = useState([]);
     const [selectedLot, setSelectedLot] = useState(null);
+    const selectedLotIdRef = useRef(null); // Stable ref — won't reset on re-render
     const [bidAmount, setBidAmount] = useState('');
     const [loading, setLoading] = useState(false);
+    const [lastLotResult, setLastLotResult] = useState(null); // Track post-hammer state
 
     const isActive = marketState?.phase === 'AUCTION';
     const currentTicker = marketState?.active_auction_asset;
@@ -20,23 +23,56 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                 try {
                     const data = await getAuctionLots();
                     setLots(data);
-                    // Update selectedLot with fresh data if it exists
-                    if (selectedLot) {
-                        const updated = data.find(l => l.id === selectedLot.id);
-                        if (updated) setSelectedLot(updated);
-                    } else if (data.length > 0) {
-                        setSelectedLot(data[0]);
+
+                    if (selectedLotIdRef.current) {
+                        // Refresh the currently selected lot with fresh data
+                        const updated = data.find(l => l.id === selectedLotIdRef.current);
+                        if (updated) {
+                            setSelectedLot(updated);
+                        } else {
+                            // Selected lot no longer exists — pick the ACTIVE one
+                            const activeLot = data.find(l => l.status === 'active');
+                            selectedLotIdRef.current = activeLot?.id ?? null;
+                            setSelectedLot(activeLot ?? null);
+                        }
+                    } else {
+                        // No selection yet — auto-pick the ACTIVE lot
+                        const activeLot = data.find(l => l.status === 'active');
+                        if (activeLot) {
+                            selectedLotIdRef.current = activeLot.id;
+                            setSelectedLot(activeLot);
+                        }
                     }
                 } catch (e) {
-                    console.error("Failed to fetch lots", e);
+                    console.error('Failed to fetch lots', e);
                 }
             };
 
             fetchLots();
-            interval = setInterval(fetchLots, 2000); // Poll every 2s
+            interval = setInterval(fetchLots, 2000);
+        } else {
+            // Auction ended — clear selection
+            selectedLotIdRef.current = null;
+            setSelectedLot(null);
+            setLots([]);
         }
         return () => clearInterval(interval);
-    }, [isActive, currentTicker, lastUpdate]); // Added lastUpdate dependency
+    }, [isActive, currentTicker, lastUpdate]);
+
+    // Always fetch user's own listings regardless of auction phase
+    useEffect(() => {
+        const fetchMyLots = async () => {
+            try {
+                if (user.role !== 'admin') {
+                    const data = await getMyAuctionLots();
+                    setMyLots(data);
+                }
+            } catch (e) { /* silent */ }
+        };
+        fetchMyLots();
+        const interval = setInterval(fetchMyLots, 5000);
+        return () => clearInterval(interval);
+    }, [user.role]);
 
     const handlePlaceBid = async () => {
         if (!selectedLot) {
@@ -52,6 +88,9 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
             // Force immediate refresh
             const data = await getAuctionLots();
             setLots(data);
+            // Update selected lot with fresh data (keep same lot selected)
+            const updated = data.find(l => l.id === selectedLotIdRef.current);
+            if (updated) setSelectedLot(updated);
         } catch (err) {
             toast.error(err.response?.data?.detail || 'Bid failed');
         } finally {
@@ -62,6 +101,12 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
     const AdminControl = () => {
         const [openingAuction, setOpeningAuction] = useState(false);
         const [resolvingAuction, setResolvingAuction] = useState(false);
+        const [openingNext, setOpeningNext] = useState(false);
+        const [endingAuction, setEndingAuction] = useState(false);
+
+        // Check if there is currently no active lot (all lots resolved/cancelled) but auction is still open
+        const hasActiveLot = lots.some(l => l.status === 'active');
+        const hasPendingLot = lots.some(l => l.status === 'pending');
 
         return (
             <div className="fintech-card" style={{ marginBottom: '1rem', border: '1px solid #b91c1c', backgroundColor: '#fef2f2' }}>
@@ -70,8 +115,10 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                 </h3>
                 <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem', flexWrap: 'wrap' }}>
                     {!currentTicker ? (
+                        // ── Stage 1: Open an Auction ──
                         <>
-                            {['GOLD', 'TECH', 'OIL', 'REAL'].map(ticker => (
+                            <p style={{ fontSize: '0.8rem', color: '#666', width: '100%', margin: 0 }}>Select an asset to open the auction:</p>
+                            {['GOLD', 'NVDA', 'BRENT', 'REITS'].map(ticker => (
                                 <button
                                     key={ticker}
                                     onClick={async () => {
@@ -79,6 +126,7 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                             setOpeningAuction(true);
                                             await openAuction(ticker);
                                             toast.success(`Auction opened for ${ticker}`);
+                                            setLastLotResult(null);
                                             await onUpdate();
                                         } catch (err) {
                                             toast.error(`Failed to open ${ticker}`, {
@@ -96,16 +144,18 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                 </button>
                             ))}
                         </>
-                    ) : (
+                    ) : hasActiveLot ? (
+                        // ── Stage 2: Hammer down active lot ──
                         <button
                             onClick={async () => {
                                 try {
                                     setResolvingAuction(true);
                                     const res = await resolveAuction();
-                                    toast.success(res.message || 'Auction resolved');
+                                    setLastLotResult(res);
+                                    toast.success(res.message || 'Lot closed');
                                     await onUpdate();
                                 } catch (err) {
-                                    toast.error('Failed to resolve auction', {
+                                    toast.error('Failed to resolve lot', {
                                         description: err.response?.data?.detail || err.message
                                     });
                                 } finally {
@@ -113,18 +163,125 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                 }
                             }}
                             className="btn btn-primary"
-                            style={{ width: '100%' }}
+                            style={{ width: '100%', background: '#b91c1c', borderColor: '#b91c1c' }}
                             disabled={resolvingAuction}
                         >
-                            {resolvingAuction ? 'PROCESSING...' : 'HAMMER DOWN (SOLD)'}
+                            {resolvingAuction ? 'PROCESSING...' : '🔨 HAMMER DOWN (SOLD / CLOSE LOT)'}
                         </button>
+                    ) : (
+                        // ── Stage 3: Post-hammer — admin decides what to do next ──
+                        <div style={{ width: '100%' }}>
+                            {lastLotResult && (
+                                <div style={{ padding: '0.75rem', background: '#fff', border: '1px solid #fca5a5', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.85rem', color: '#374151' }}>
+                                    <strong>Result:</strong> {lastLotResult.message}
+                                    {lastLotResult.lots_remaining > 0 && (
+                                        <span style={{ marginLeft: '0.75rem', color: '#6B7280' }}>({lastLotResult.lots_remaining} lot{lastLotResult.lots_remaining > 1 ? 's' : ''} remaining)</span>
+                                    )}
+                                </div>
+                            )}
+                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                {hasPendingLot && (
+                                    <button
+                                        onClick={async () => {
+                                            try {
+                                                setOpeningNext(true);
+                                                const res = await openNextLot();
+                                                if (res.opened) {
+                                                    toast.success(res.message);
+                                                    setLastLotResult(null);
+                                                } else {
+                                                    toast.error(res.message);
+                                                }
+                                                await onUpdate();
+                                            } catch (err) {
+                                                toast.error('Failed to open next lot', { description: err.response?.data?.detail });
+                                            } finally {
+                                                setOpeningNext(false);
+                                            }
+                                        }}
+                                        className="btn btn-primary"
+                                        style={{ flex: 1 }}
+                                        disabled={openingNext}
+                                    >
+                                        {openingNext ? 'OPENING...' : '▶ OPEN NEXT LOT'}
+                                    </button>
+                                )}
+                                <button
+                                    onClick={async () => {
+                                        try {
+                                            setEndingAuction(true);
+                                            const res = await endAuction();
+                                            toast.success(res.message || 'Auction ended');
+                                            setLastLotResult(null);
+                                            await onUpdate();
+                                        } catch (err) {
+                                            toast.error('Failed to end auction', { description: err.response?.data?.detail });
+                                        } finally {
+                                            setEndingAuction(false);
+                                        }
+                                    }}
+                                    className="btn btn-secondary"
+                                    style={{ flex: 1, border: '1px solid #b91c1c', color: '#b91c1c' }}
+                                    disabled={endingAuction}
+                                >
+                                    {endingAuction ? 'ENDING...' : '⏹ END AUCTION'}
+                                </button>
+                            </div>
+                        </div>
                     )}
                 </div>
             </div>
         );
     };
 
-    if (!isActive && user.role !== 'admin') return null;
+    const LotSchedule = () => (
+        <div className="fintech-card" style={{ marginTop: isActive ? '2rem' : '0' }}>
+            <h3 style={{ marginBottom: '1rem', textTransform: 'uppercase', color: '#666', fontSize: '0.85rem' }}>Asset Lot Schedule (Units per Lot)</h3>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB', textAlign: 'left' }}>
+                        <th style={{ padding: '0.75rem 0.5rem', width: '25%' }}>Asset</th>
+                        <th style={{ padding: '0.75rem 0.5rem' }}>Lots</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>GOLD</td>
+                        <td className="mono-num" style={{ padding: '0.75rem 0.5rem', color: '#4B5563' }}>5 &rarr; 10 &rarr; 15 &rarr; 20 units</td>
+                    </tr>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>NVDA</td>
+                        <td className="mono-num" style={{ padding: '0.75rem 0.5rem', color: '#4B5563' }}>25 &rarr; 50 &rarr; 75 &rarr; 100 units</td>
+                    </tr>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>BRENT</td>
+                        <td className="mono-num" style={{ padding: '0.75rem 0.5rem', color: '#4B5563' }}>50 &rarr; 100 &rarr; 150 &rarr; 200 units</td>
+                    </tr>
+                    <tr style={{ borderBottom: '1px solid #E5E7EB' }}>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>REITS</td>
+                        <td className="mono-num" style={{ padding: '0.75rem 0.5rem', color: '#4B5563' }}>3 &rarr; 5 &rarr; 8 &rarr; 10 units</td>
+                    </tr>
+                    <tr>
+                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>TBILL</td>
+                        <td style={{ padding: '0.75rem 0.5rem', color: '#6B7280' }}>Not auctioned (buy direct)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    );
+
+    if (!isActive && user.role !== 'admin') {
+        return (
+            <div className="animate-fade-in">
+                <div style={{ textAlign: 'center', padding: '3rem 0', color: '#666' }}>
+                    <Gavel size={48} style={{ margin: '0 auto 1rem', opacity: 0.2 }} />
+                    <h2 style={{ textTransform: 'uppercase', marginBottom: '0.5rem' }}>Auction House Closed</h2>
+                    <p style={{ fontSize: '0.9rem' }}>Wait for the auctioneer to open bidding on an asset.</p>
+                </div>
+                <LotSchedule />
+            </div>
+        );
+    }
 
     return (
         <div className="animate-fade-in">
@@ -138,10 +295,10 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                             <div className="text-label" style={{ fontSize: '0.8rem' }}>ON THE BLOCK</div>
                             <h1 style={{ fontSize: '3rem', margin: '0.75rem 0', color: '#D1202F' }}>{currentTicker || "WAITING..."}</h1>
                             <div style={{ fontSize: '0.9rem', color: '#666' }}>
-                                {currentTicker === 'TECH' ? 'Tech Growth ETF' :
+                                {currentTicker === 'NVDA' ? 'NVIDIA Growth ETF' :
                                     currentTicker === 'GOLD' ? 'Gold Reserves' :
-                                        currentTicker === 'OIL' ? 'Oil Futures' :
-                                            currentTicker === 'REAL' ? 'Real Estate' : 'Asset Class'}
+                                        currentTicker === 'BRENT' ? 'S&P Brent Crude Oil' :
+                                            currentTicker === 'REITS' ? 'REITs Index' : 'Asset Class'}
                             </div>
                             <div className="pill pill-red" style={{ marginTop: '1rem', fontSize: '0.75rem' }}>LIVE AUCTION</div>
                         </div>
@@ -154,6 +311,7 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                     <button
                                         key={lot.id}
                                         onClick={() => {
+                                            selectedLotIdRef.current = lot.id;
                                             setSelectedLot(lot);
                                             setBidAmount(lot.highest_bid ? (lot.highest_bid + 50).toString() : lot.base_price.toString());
                                         }}
@@ -296,6 +454,32 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                     <p style={{ color: '#666', fontSize: '0.85rem' }}>Wait for the administrator to open the next auction</p>
                 </div>
             )}
+
+            {myLots.length > 0 && (
+                <div className="fintech-card" style={{ marginTop: '1.5rem' }}>
+                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+                        <List size={16} /> My Listings
+                    </h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                        {myLots.map(lot => {
+                            const statusColor = lot.status === 'sold' ? '#16A34A' : lot.status === 'active' ? '#2563EB' : lot.status === 'cancelled' ? '#DC2626' : '#6B7280';
+                            return (
+                                <div key={lot.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.75rem', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: '3px', fontSize: '0.85rem' }}>
+                                    <span>
+                                        <strong>{lot.asset_ticker}</strong> — Lot #{lot.lot_number} — {lot.quantity} units
+                                        {lot.winner_username && <span style={{ color: '#6B7280', marginLeft: '0.5rem' }}>→ {lot.winner_username}</span>}
+                                    </span>
+                                    <span style={{ fontWeight: 700, textTransform: 'uppercase', fontSize: '0.75rem', color: statusColor }}>
+                                        {lot.status}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            <LotSchedule />
         </div>
     );
 }
