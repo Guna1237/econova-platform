@@ -38,7 +38,8 @@ export default function AdminLeaderboard() {
         return () => clearInterval(interval);
     }, []);
 
-    const maxNetWorth = data.length > 0 ? Math.max(...data.map(t => t.net_worth)) : 1;
+    const filteredData = data.filter(t => !t.username.startsWith('market_maker_'));
+    const maxNetWorth = filteredData.length > 0 ? Math.max(...filteredData.map(t => t.net_worth)) : 1;
 
     return (
         <div style={{ fontFamily: "'Inter', sans-serif" }}>
@@ -92,7 +93,7 @@ export default function AdminLeaderboard() {
                 </div>
             ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    {data.map((team, idx) => {
+                    {filteredData.map((team, idx) => {
                         const isTop3 = idx < 3;
                         const isLeader = idx === 0;
                         return (

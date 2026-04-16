@@ -7,10 +7,11 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
+import SecondaryAuctionHall from '../components/SecondaryAuctionHall';
 import CreditNetwork from '../components/CreditNetwork';
 import PriceChart from '../components/PriceChart';
 import ConsentForm from '../components/ConsentForm';
@@ -26,6 +27,11 @@ import Treasury from '../components/Treasury';
 import AdminTradeApprovals from '../components/AdminTradeApprovals';
 import AdminLoanApprovals from '../components/AdminLoanApprovals';
 import AdminLeaderboard from '../components/AdminLeaderboard';
+import AdminBankerManagement from '../components/AdminBankerManagement';
+import AdminBankerApprovals from '../components/AdminBankerApprovals';
+import AdminMortgageApprovals from '../components/AdminMortgageApprovals';
+import AdminSecondaryAuction from '../components/AdminSecondaryAuction';
+import PublicLeaderboard from '../components/PublicLeaderboard';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -40,6 +46,9 @@ export default function Dashboard() {
     // Admin State
     const [adminUsers, setAdminUsers] = useState([]);
     const [newTeam, setNewTeam] = useState({ username: '', password: '' });
+    const [flaggedTrades, setFlaggedTrades] = useState([]);
+    const [auctionConfig, setAuctionConfigState] = useState({});
+    const [teamCapitalInput, setTeamCapitalInput] = useState('');
 
     // Trading State
     const [order, setOrder] = useState({ assetId: '', type: 'buy', quantity: '', price: '' });
@@ -48,6 +57,12 @@ export default function Dashboard() {
     const [lastUpdate, setLastUpdate] = useState(Date.now()); // Force refresh for children
 
     // Notifications State
+    const [autoAdvanceEnabled, setAutoAdvanceEnabled] = useState(false);
+    const [autoAdvanceMin, setAutoAdvanceMin] = useState(3);
+    const [timeRemainingDisplay, setTimeRemainingDisplay] = useState(0);
+    const autoAdvanceTimerRef = useRef(null);
+    const timeRemainingRef = useRef(0);
+
     const [notifications, setNotifications] = useState({
         news: false,
         marketplace: false,
@@ -115,6 +130,26 @@ export default function Dashboard() {
 
     const navigate = useNavigate();
 
+    useEffect(() => {
+        if (autoAdvanceEnabled && user?.role === 'admin') {
+            timeRemainingRef.current = autoAdvanceMin * 60;
+            setTimeRemainingDisplay(timeRemainingRef.current);
+            autoAdvanceTimerRef.current = setInterval(() => {
+                timeRemainingRef.current -= 1;
+                setTimeRemainingDisplay(timeRemainingRef.current);
+                if (timeRemainingRef.current <= 0) {
+                    handleNextQuarter();
+                    timeRemainingRef.current = autoAdvanceMin * 60;
+                }
+            }, 1000);
+        } else {
+            if (autoAdvanceTimerRef.current) {
+                clearInterval(autoAdvanceTimerRef.current);
+            }
+        }
+        return () => clearInterval(autoAdvanceTimerRef.current);
+    }, [autoAdvanceEnabled, autoAdvanceMin, user?.role]);
+
     const fetchData = async () => {
         try {
             // setLoading(true); // Don't block UI on refresh
@@ -174,6 +209,11 @@ export default function Dashboard() {
             if (userData.role === 'admin') {
                 const users = await getAdminUsers();
                 setAdminUsers(users);
+                try { const flagged = await getFlaggedTrades(); setFlaggedTrades(flagged); } catch (_) {}
+                try { const cfg = await getAuctionConfig(); setAuctionConfigState(cfg || {}); } catch (_) {}
+                if (!teamCapitalInput) {
+                    setTeamCapitalInput(String(marketData?.team_starting_capital ?? 1000000));
+                }
             }
         } catch (err) {
             console.error(err);
@@ -204,11 +244,13 @@ export default function Dashboard() {
             if (msg.type === 'news_update') notifyTab = 'news';
             if (msg.type === 'market_update') {
                 const action = msg.data?.action || '';
-                if (action.includes('loan')) notifyTab = 'credit';
+                if (action.includes('loan') || action.includes('mortgage')) notifyTab = 'credit';
                 if (action === 'trade_pending_approval') {
                     notifyTab = 'admin_panel';
-                    // Always play sound for admin on trade approval request
                     playNotificationSound('standard');
+                }
+                if (action.includes('mortgage') && action !== 'mortgage_repaid') {
+                    if (user?.role === 'admin') { notifyTab = 'admin_panel'; playNotificationSound('standard'); }
                 }
                 if (action.includes('year') || action.includes('quarter')) {
                     soundType = 'time';
@@ -217,7 +259,6 @@ export default function Dashboard() {
                 if (action === 'offer_created') {
                     const currentUser = user?.username;
                     const target = msg.data?.to;
-                    // Play sound if: open offer OR the offer is specifically for me
                     if (!target || target === currentUser) {
                         notifyTab = 'marketplace';
                         playNotificationSound('standard');
@@ -373,6 +414,95 @@ export default function Dashboard() {
         } catch (e) { toast.error('Failed to toggle credit facility'); }
     };
 
+    // --- New handler functions ---
+    const [resetConfirmText, setResetConfirmText] = useState('');
+    const [showResetModal, setShowResetModal] = useState(false);
+    const [auctionListModal, setAuctionListModal] = useState(null); // { ticker, maxQty }
+    const [auctionListForm, setAuctionListForm] = useState({ quantity: '', reservePrice: '' });
+
+    const [settleConfirmText, setSettleConfirmText] = useState('');
+    const [showSettleModal, setShowSettleModal] = useState(false);
+    const [settlementReport, setSettlementReport] = useState(null);
+
+    const handleSettleAllDebts = async () => {
+        if (settleConfirmText !== 'SETTLE') return;
+        try {
+            const res = await settleAllDebts();
+            toast.success(res.message);
+            setShowSettleModal(false);
+            setSettleConfirmText('');
+            setSettlementReport(res.report);
+            fetchData();
+        } catch (e) { toast.error('Settlement failed: ' + (e.response?.data?.detail || e.message)); }
+    };
+
+    const handleResetGame = async () => {
+        if (resetConfirmText !== 'RESET') return;
+        try {
+            const res = await resetGame();
+            toast.success(res.message);
+            setShowResetModal(false);
+            setResetConfirmText('');
+            fetchData();
+        } catch (e) { toast.error('Reset failed: ' + (e.response?.data?.detail || e.message)); }
+    };
+
+    const handleSeedHistory = async () => {
+        try {
+            const res = await seedHistory();
+            toast.success(res.message);
+            fetchData();
+        } catch (e) { toast.error('Seed failed: ' + (e.response?.data?.detail || e.message)); }
+    };
+
+    const handleTriggerRecovery = async () => {
+        try {
+            const res = await triggerRecovery();
+            toast.success(res.message);
+            fetchData();
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed to trigger recovery'); }
+    };
+
+    const handleResetShock = async () => {
+        try {
+            const res = await resetShock();
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to reset shock'); }
+    };
+
+    const handleSetSentiment = async (sentiment) => {
+        try {
+            const res = await setSentiment(sentiment);
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to set sentiment'); }
+    };
+
+    const handleToggleBots = async () => {
+        try {
+            const res = await toggleBots();
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to toggle bots'); }
+    };
+
+    const handleSubmitAuctionListing = async () => {
+        const qty = parseInt(auctionListForm.quantity);
+        const price = parseFloat(auctionListForm.reservePrice);
+        if (!qty || qty <= 0 || !price || price <= 0) {
+            toast.error('Enter valid quantity and reserve price');
+            return;
+        }
+        try {
+            const { submitSecondaryAuctionRequest } = await import('../services/api');
+            const res = await submitSecondaryAuctionRequest(auctionListModal.ticker, qty, price);
+            toast.success(res.message);
+            setAuctionListModal(null);
+            setAuctionListForm({ quantity: '', reservePrice: '' });
+        } catch (e) { toast.error(e.response?.data?.detail || 'Failed to submit listing'); }
+    };
+
     if (loading) return (
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', flexDirection: 'column', gap: '1rem' }}>
             <div className="animate-spin" style={{ width: '40px', height: '40px', border: '3px solid #D1202F', borderTopColor: 'transparent', borderRadius: '50%' }}></div>
@@ -395,6 +525,7 @@ export default function Dashboard() {
         { id: 'news', label: 'NEWS', icon: Play },
         { id: 'marketplace', label: 'MARKETPLACE', icon: TrendingUp },
         { id: 'auction', label: 'AUCTION HALL', icon: Gavel },
+        { id: 'secondary_mkt', label: 'SECONDARY MKT', icon: Gavel },
         { id: 'treasury', label: 'TREASURY', icon: Shield },
         { id: 'credit', label: 'CREDIT NETWORK', icon: Landmark },
         { id: 'analysis', label: 'ANALYSIS', icon: Activity },
@@ -404,7 +535,6 @@ export default function Dashboard() {
     if (user.role === 'admin') {
         sidebarItems.push({ id: 'admin_panel', label: 'ADMIN CONTROL', icon: ShieldAlert });
     } else {
-        // Team users get settings option
         sidebarItems.push({ id: 'settings', label: 'SETTINGS', icon: ShieldAlert });
     }
 
@@ -416,6 +546,181 @@ export default function Dashboard() {
     return (
         <div className="animate-fade-in" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
             <Toaster position="bottom-right" richColors theme="light" />
+
+            {/* Public Leaderboard Overlay */}
+            <AnimatePresence>
+                {marketState?.leaderboard_visible && (
+                    <PublicLeaderboard
+                        user={user}
+                        marketState={marketState}
+                        onClose={() => {
+                            toggleLeaderboard().then(() => fetchData()).catch(e => toast.error(e?.response?.data?.detail || 'Failed'));
+                        }}
+                    />
+                )}
+            </AnimatePresence>
+
+            {/* Secondary Auction Listing Modal */}
+            {auctionListModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div style={{ background: '#FFF', border: '1px solid #E5E7EB', padding: '2rem', maxWidth: '420px', width: '90%' }}>
+                        <h3 style={{ marginTop: 0, textTransform: 'uppercase' }}>List in Auction Hall</h3>
+                        <p style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '1.5rem' }}>
+                            List your <strong>{auctionListModal.ticker}</strong> shares for auction. Admin will review and activate the lot. You hold up to <strong>{auctionListModal.maxQty}</strong> shares.
+                        </p>
+                        <p style={{ fontSize: '0.75rem', color: '#6B7280', marginBottom: '1rem' }}>
+                            Proceeds: 20% capital gains tax on profit, or $500 listing fee if sold at a loss.
+                        </p>
+                        <div style={{ marginBottom: '1rem' }}>
+                            <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: '0.3rem' }}>QUANTITY (max {auctionListModal.maxQty})</label>
+                            <input
+                                type="number" min="1" max={auctionListModal.maxQty}
+                                value={auctionListForm.quantity}
+                                onChange={e => setAuctionListForm(f => ({ ...f, quantity: e.target.value }))}
+                                style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', boxSizing: 'border-box' }}
+                            />
+                        </div>
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={{ fontSize: '0.78rem', fontWeight: 700, display: 'block', marginBottom: '0.3rem' }}>RESERVE PRICE PER UNIT ($)</label>
+                            <input
+                                type="number" min="0.01" step="0.01"
+                                value={auctionListForm.reservePrice}
+                                onChange={e => setAuctionListForm(f => ({ ...f, reservePrice: e.target.value }))}
+                                style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1D5DB', boxSizing: 'border-box' }}
+                            />
+                        </div>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button onClick={handleSubmitAuctionListing} style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: '#000', color: '#FFF', border: 'none', cursor: 'pointer' }}>
+                                SUBMIT REQUEST
+                            </button>
+                            <button onClick={() => setAuctionListModal(null)} style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: '#F3F4F6', color: '#374151', border: '1px solid #E5E7EB', cursor: 'pointer' }}>
+                                CANCEL
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Reset Game Confirmation Modal */}
+            {showResetModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div style={{ background: '#FFF', border: '2px solid #D1202F', padding: '2rem', maxWidth: '400px', width: '90%' }}>
+                        <h3 style={{ color: '#D1202F', marginTop: 0, textTransform: 'uppercase' }}>⚠ Reset Game</h3>
+                        <p style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '1.5rem' }}>
+                            This will wipe <strong>all teams, holdings, loans, news, and history</strong>. Admin and banker accounts are preserved. Asset prices reset to base values.
+                        </p>
+                        <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#374151', marginBottom: '0.5rem' }}>Type <code>RESET</code> to confirm:</p>
+                        <input
+                            value={resetConfirmText}
+                            onChange={e => setResetConfirmText(e.target.value.toUpperCase())}
+                            placeholder="RESET"
+                            style={{ width: '100%', padding: '0.5rem', border: '1px solid #D1202F', fontSize: '1rem', marginBottom: '1rem', boxSizing: 'border-box' }}
+                        />
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button
+                                onClick={handleResetGame}
+                                disabled={resetConfirmText !== 'RESET'}
+                                style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: resetConfirmText === 'RESET' ? '#D1202F' : '#E5E7EB', color: resetConfirmText === 'RESET' ? '#FFF' : '#9CA3AF', border: 'none', cursor: resetConfirmText === 'RESET' ? 'pointer' : 'not-allowed' }}
+                            >
+                                CONFIRM RESET
+                            </button>
+                            <button
+                                onClick={() => { setShowResetModal(false); setResetConfirmText(''); }}
+                                style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: '#F3F4F6', color: '#374151', border: '1px solid #E5E7EB', cursor: 'pointer' }}
+                            >
+                                CANCEL
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Settle All Debts Confirmation Modal */}
+            {showSettleModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div style={{ background: '#FFF', border: '2px solid #000', padding: '2rem', maxWidth: '450px', width: '90%' }}>
+                        <h3 style={{ color: '#000', marginTop: 0, textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <Gavel size={20} /> End of Game Settlement
+                        </h3>
+                        <p style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '1.5rem' }}>
+                            This will force liquidate assets from any team with outstanding debt (whose cash cannot cover the loan). Lenders will be repaid proportionally. <strong>This action is irreversible.</strong>
+                        </p>
+                        <p style={{ fontSize: '0.85rem', fontWeight: 700, color: '#374151', marginBottom: '0.5rem' }}>Type <code>SETTLE</code> to execute:</p>
+                        <input
+                            value={settleConfirmText}
+                            onChange={e => setSettleConfirmText(e.target.value.toUpperCase())}
+                            placeholder="SETTLE"
+                            style={{ width: '100%', padding: '0.5rem', border: '1px solid #000', fontSize: '1rem', marginBottom: '1rem', boxSizing: 'border-box' }}
+                        />
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <button
+                                onClick={handleSettleAllDebts}
+                                disabled={settleConfirmText !== 'SETTLE'}
+                                style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: settleConfirmText === 'SETTLE' ? '#000' : '#E5E7EB', color: settleConfirmText === 'SETTLE' ? '#FFF' : '#9CA3AF', border: 'none', cursor: settleConfirmText === 'SETTLE' ? 'pointer' : 'not-allowed' }}
+                            >
+                                EXECUTE
+                            </button>
+                            <button
+                                onClick={() => { setShowSettleModal(false); setSettleConfirmText(''); }}
+                                style={{ flex: 1, padding: '0.6rem', fontWeight: 700, background: '#F3F4F6', color: '#374151', border: '1px solid #E5E7EB', cursor: 'pointer' }}
+                            >
+                                CANCEL
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Settlement Report Modal */}
+            {settlementReport && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+                    <div style={{ background: '#FFF', border: '2px solid #059669', padding: '2rem', maxWidth: '600px', width: '90%', maxHeight: '80vh', overflowY: 'auto' }}>
+                        <h3 style={{ color: '#059669', marginTop: 0, textTransform: 'uppercase' }}>✅ Settlement Report</h3>
+                        
+                        {settlementReport.length === 0 ? (
+                            <p style={{ fontSize: '0.9rem' }}>No defaulting teams found. All loans are either covered by cash or no active loans exist.</p>
+                        ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+                                {settlementReport.map((r, i) => (
+                                    <div key={i} style={{ background: '#F9FAFB', border: '1px solid #E5E7EB', padding: '1rem', borderRadius: '4px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                                            <strong style={{ fontSize: '1rem' }}>{r.team}</strong>
+                                            <span style={{ color: r.shortfall > 0 ? '#D1202F' : '#059669', fontWeight: 700 }}>
+                                                {r.shortfall > 0 ? `Shortfall: $${r.shortfall}` : 'Fully Settled'}
+                                            </span>
+                                        </div>
+                                        <div style={{ fontSize: '0.85rem', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                            <div>Total Debt: <strong>${r.debt}</strong></div>
+                                            <div>Asset / Cash Used: <strong>${r.cash_used}</strong></div>
+                                        </div>
+                                        {r.assets_sold.length > 0 && (
+                                            <div>
+                                                <div style={{ fontSize: '0.75rem', color: '#6B7280', marginBottom: '0.2rem' }}>Assets Liquidated:</div>
+                                                <div style={{ fontSize: '0.8rem', background: '#FFF', border: '1px solid #E5E7EB', padding: '0.5rem' }}>
+                                                    {r.assets_sold.map((s, idx) => (
+                                                        <div key={idx} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                            <span>{s.quantity}x {s.ticker} @ ${s.unit_price}</span>
+                                                            <strong>${s.proceeds}</strong>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <button
+                            onClick={() => setSettlementReport(null)}
+                            style={{ width: '100%', padding: '0.6rem', fontWeight: 700, background: '#059669', color: '#FFF', border: 'none', cursor: 'pointer' }}
+                        >
+                            CLOSE REPORT
+                        </button>
+                    </div>
+                </div>
+            )}
+
 
             {/* 3.2 HEADER (Institutional Identity) */}
             <header style={{
@@ -581,17 +886,42 @@ export default function Dashboard() {
                 <main style={{ flex: 1, overflowY: 'auto', padding: '1.5rem', background: '#F9FAFB' }}>
                     <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
 
-                        {/* Admin Panel (If Applicable) */}
+                        {/* Admin Quick Controls Banner */}
                         {user?.role === 'admin' && activeTab !== 'admin_panel' && (
-                            <div style={{ marginBottom: '2rem', border: '1px solid #D1202F', background: '#FFF', padding: '1.5rem' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <h3 style={{ margin: 0, color: '#D1202F', textTransform: 'uppercase' }}>Governance Control</h3>
-                                    <div style={{ display: 'flex', gap: '1rem' }}>
-                                        <button onClick={() => handleShock('INFLATION', 'CRASH')} style={{ background: '#D1202F', color: 'white', border: 'none', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>TRIG. INFLATION</button>
-                                        <button onClick={() => handleShock('RECESSION', 'CRASH')} style={{ background: '#D1202F', color: 'white', border: 'none', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>TRIG. RECESSION</button>
-                                        <button onClick={handleNextQuarter} style={{ border: '2px solid #D1202F', background: 'transparent', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem', color: '#D1202F' }}>ADVANCE Q</button>
-                                        <button onClick={handleNextTurn} style={{ border: '2px solid #000', background: 'transparent', padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem' }}>ADVANCE YEAR</button>
+                            <div style={{ marginBottom: '1.5rem', border: '1px solid #D1202F', background: '#FFF', padding: '0.75rem 1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                    <span style={{ color: '#D1202F', fontWeight: 800, fontSize: '0.7rem', letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>GOVERNANCE</span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: '#F9FAFB', padding: '0.35rem 0.75rem', borderRadius: '4px', border: '1px solid #E5E7EB' }}>
+                                        <label style={{ fontSize: '0.7rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem', cursor: 'pointer' }}>
+                                            <input type="checkbox" checked={autoAdvanceEnabled} onChange={e => setAutoAdvanceEnabled(e.target.checked)} style={{ accentColor: '#D1202F' }}/>
+                                            AUTO-ADVANCE Q:
+                                        </label>
+                                        <input type="number" value={autoAdvanceMin} onChange={e => setAutoAdvanceMin(Math.max(1, parseInt(e.target.value) || 1))} style={{ width: '40px', padding: '0.1rem', fontSize: '0.7rem', border: '1px solid #CCC', textAlign: 'center' }} disabled={autoAdvanceEnabled} />
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 700 }}>MIN</span>
+                                        {autoAdvanceEnabled && (
+                                            <span style={{ fontSize: '0.7rem', fontWeight: 800, color: '#D1202F', marginLeft: '0.5rem', fontVariantNumeric: 'tabular-nums' }}>
+                                                {Math.floor(timeRemainingDisplay / 60)}:{(timeRemainingDisplay % 60).toString().padStart(2, '0')}
+                                            </span>
+                                        )}
                                     </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <button onClick={() => handleShock('INFLATION', 'CRASH')} style={{ background: '#D1202F', color: '#FFF', border: 'none', padding: '0.35rem 0.85rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', letterSpacing: '0.04em' }}>TRIGGER INFLATION</button>
+                                    <button onClick={() => handleShock('RECESSION', 'CRASH')} style={{ background: '#D1202F', color: '#FFF', border: 'none', padding: '0.35rem 0.85rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer', letterSpacing: '0.04em' }}>TRIGGER RECESSION</button>
+                                    <button onClick={() => handleShock('INFLATION', 'HINT')} style={{ background: 'transparent', color: '#D1202F', border: '1.5px solid #D1202F', padding: '0.35rem 0.75rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>HINT INFLATION</button>
+                                    <button onClick={() => handleShock('RECESSION', 'HINT')} style={{ background: 'transparent', color: '#D1202F', border: '1.5px solid #D1202F', padding: '0.35rem 0.75rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>HINT RECESSION</button>
+                                    <div style={{ width: '1px', height: '22px', background: '#E5E7EB', flexShrink: 0 }} />
+                                    <button onClick={handleTriggerRecovery} style={{ background: '#059669', color: '#FFF', border: 'none', padding: '0.35rem 0.75rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>RECOVERY</button>
+                                    <button onClick={handleResetShock} style={{ background: 'transparent', color: '#6B7280', border: '1.5px solid #6B7280', padding: '0.35rem 0.75rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>RESET SHOCK</button>
+                                    <div style={{ width: '1px', height: '22px', background: '#E5E7EB', flexShrink: 0 }} />
+                                    {marketState?.sentiment && (
+                                        <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.2rem 0.5rem', borderRadius: '3px', background: marketState.sentiment === 'BULLISH' ? '#D1FAE5' : marketState.sentiment === 'BEARISH' ? '#FEE2E2' : '#F3F4F6', color: marketState.sentiment === 'BULLISH' ? '#059669' : marketState.sentiment === 'BEARISH' ? '#D1202F' : '#6B7280' }}>
+                                            {marketState.sentiment === 'BULLISH' ? '😊' : marketState.sentiment === 'BEARISH' ? '😟' : '😐'} {marketState.sentiment}
+                                        </span>
+                                    )}
+                                    <div style={{ width: '1px', height: '22px', background: '#E5E7EB', flexShrink: 0 }} />
+                                    <button onClick={handleNextQuarter} style={{ background: 'transparent', color: '#000', border: '1.5px solid #000', padding: '0.35rem 0.85rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>ADVANCE Q</button>
+                                    <button onClick={handleNextTurn} style={{ background: '#000', color: '#FFF', border: 'none', padding: '0.35rem 0.85rem', fontWeight: 700, fontSize: '0.72rem', cursor: 'pointer' }}>ADVANCE YEAR</button>
                                 </div>
                             </div>
                         )}
@@ -685,6 +1015,134 @@ export default function Dashboard() {
                                                     MIGRATE ASSETS (1×)
                                                 </button>
                                             </div>
+
+                                            {/* Investor Sentiment Dial */}
+                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E5E7EB' }}>
+                                                <div className="text-label" style={{ marginBottom: '0.5rem' }}>INVESTOR SENTIMENT</div>
+                                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                    {['BULLISH', 'NEUTRAL', 'BEARISH'].map(s => (
+                                                        <button
+                                                            key={s}
+                                                            onClick={() => handleSetSentiment(s)}
+                                                            style={{
+                                                                padding: '0.4rem 0.9rem', fontWeight: 700, fontSize: '0.78rem',
+                                                                cursor: 'pointer',
+                                                                border: '2px solid',
+                                                                borderColor: marketState?.sentiment === s ? (s === 'BULLISH' ? '#059669' : s === 'BEARISH' ? '#D1202F' : '#6B7280') : '#E5E7EB',
+                                                                background: marketState?.sentiment === s ? (s === 'BULLISH' ? '#D1FAE5' : s === 'BEARISH' ? '#FEE2E2' : '#F3F4F6') : '#FFF',
+                                                                color: marketState?.sentiment === s ? (s === 'BULLISH' ? '#059669' : s === 'BEARISH' ? '#D1202F' : '#374151') : '#9CA3AF',
+                                                            }}
+                                                        >
+                                                            {s === 'BULLISH' ? '😊' : s === 'BEARISH' ? '😟' : '😐'} {s}
+                                                        </button>
+                                                    ))}
+                                                    <span style={{ fontSize: '0.72rem', color: '#9CA3AF', marginLeft: '0.5rem' }}>Affects quarterly price growth</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Market Maker Bots Toggle */}
+                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                <button
+                                                    onClick={handleToggleBots}
+                                                    style={{
+                                                        padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem',
+                                                        border: '2px solid',
+                                                        borderColor: marketState?.bots_enabled ? '#8B5CF6' : '#6B7280',
+                                                        background: marketState?.bots_enabled ? '#EDE9FE' : '#F3F4F6',
+                                                        color: marketState?.bots_enabled ? '#7C3AED' : '#374151',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {marketState?.bots_enabled ? '🤖 MARKET MAKER BOTS: ON' : '🤖 MARKET MAKER BOTS: OFF'}
+                                                </button>
+                                                <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>
+                                                    {marketState?.bots_enabled ? 'Value & contrarian bots active each quarter.' : 'Bots are idle.'}
+                                                </span>
+                                            </div>
+
+                                            {/* Leaderboard Visibility Toggle */}
+                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E5E7EB', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                <button
+                                                    onClick={() => toggleLeaderboard().then(() => fetchData()).catch(e => toast.error(e?.response?.data?.detail || 'Failed'))}
+                                                    style={{
+                                                        padding: '0.5rem 1rem', fontWeight: 700, fontSize: '0.8rem',
+                                                        border: '2px solid',
+                                                        borderColor: marketState?.leaderboard_visible ? '#D1202F' : '#6B7280',
+                                                        background: marketState?.leaderboard_visible ? '#FEE2E2' : '#F3F4F6',
+                                                        color: marketState?.leaderboard_visible ? '#D1202F' : '#374151',
+                                                        cursor: 'pointer'
+                                                    }}
+                                                >
+                                                    {marketState?.leaderboard_visible ? '📊 LEADERBOARD: VISIBLE' : '📊 LEADERBOARD: HIDDEN'}
+                                                </button>
+                                                <span style={{ fontSize: '0.72rem', color: '#6B7280' }}>
+                                                    {marketState?.leaderboard_visible ? 'All players can see the live leaderboard.' : 'Only admin sees rankings.'}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        {/* Auction Lot Configuration */}
+                                        <div className="fintech-card" style={{ marginBottom: '2rem', background: '#FFF' }}>
+                                            <div className="text-label" style={{ marginBottom: '1rem' }}>AUCTION LOT CONFIGURATION</div>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
+                                                {['GOLD', 'NVDA', 'BRENT', 'REITS'].map(ticker => {
+                                                    const defaults = { GOLD: [4,10], NVDA: [4,50], BRENT: [4,100], REITS: [4,5] };
+                                                    const cfg = auctionConfig[ticker] || {};
+                                                    const numLots = cfg.num_lots ?? defaults[ticker][0];
+                                                    const units = cfg.units_per_lot ?? defaults[ticker][1];
+                                                    const premium = cfg.last_lot_premium ?? 1.0;
+                                                    return (
+                                                        <div key={ticker} style={{ border: '1px solid #E5E7EB', borderRadius: '8px', padding: '0.75rem' }}>
+                                                            <div style={{ fontWeight: 700, fontSize: '0.8rem', marginBottom: '0.6rem', color: '#111' }}>{ticker}</div>
+                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
+                                                                    LOTS
+                                                                    <input
+                                                                        type="number" min="1" max="20"
+                                                                        defaultValue={numLots}
+                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), num_lots: parseInt(e.target.value) || 1 } }))}
+                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
+                                                                    />
+                                                                </label>
+                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
+                                                                    UNITS / LOT
+                                                                    <input
+                                                                        type="number" min="1"
+                                                                        defaultValue={units}
+                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), units_per_lot: parseInt(e.target.value) || 1 } }))}
+                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
+                                                                    />
+                                                                </label>
+                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
+                                                                    LAST LOT PREMIUM ×
+                                                                    <input
+                                                                        type="number" min="1.0" step="0.01"
+                                                                        defaultValue={premium}
+                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), last_lot_premium: parseFloat(e.target.value) || 1.0 } }))}
+                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
+                                                                    />
+                                                                </label>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        const c = auctionConfig[ticker] || {};
+                                                                        const defs = { GOLD: [4,10], NVDA: [4,50], BRENT: [4,100], REITS: [4,5] };
+                                                                        setAuctionConfig(
+                                                                            ticker,
+                                                                            c.num_lots ?? defs[ticker][0],
+                                                                            c.units_per_lot ?? defs[ticker][1],
+                                                                            c.last_lot_premium ?? 1.0
+                                                                        ).then(() => toast.success(`${ticker} lot config saved`))
+                                                                        .catch(e => toast.error(e?.response?.data?.detail || 'Failed'));
+                                                                    }}
+                                                                    style={{ marginTop: '0.3rem', padding: '0.3rem', background: '#000', color: '#FFF', border: 'none', fontWeight: 700, fontSize: '0.7rem', cursor: 'pointer', width: '100%' }}
+                                                                >
+                                                                    SAVE
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
 
                                         {/* Trade Approval Queue */}
@@ -697,6 +1155,16 @@ export default function Dashboard() {
                                             <AdminLoanApprovals />
                                         </div>
 
+                                        {/* Mortgage Approval Queue */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminMortgageApprovals />
+                                        </div>
+
+                                        {/* Secondary Auction Listing Requests */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminSecondaryAuction />
+                                        </div>
+
                                         {/* Existing Team Management */}
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
                                             <TeamManagement teams={adminUsers} onUpdate={fetchData} />
@@ -704,6 +1172,36 @@ export default function Dashboard() {
                                             <div>
                                                 <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Create Team</h2>
                                                 <div className="fintech-card">
+                                                    {/* Team starting capital */}
+                                                    <div style={{ marginBottom: '1rem', paddingBottom: '1rem', borderBottom: '1px solid #E5E7EB' }}>
+                                                        <label className="text-label">STARTING CAPITAL (per team)</label>
+                                                        <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem' }}>
+                                                            <input
+                                                                className="input-field"
+                                                                type="number" min="1000" step="50000"
+                                                                value={teamCapitalInput}
+                                                                onChange={e => setTeamCapitalInput(e.target.value)}
+                                                                style={{ flex: 1 }}
+                                                                placeholder="1000000"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const amt = parseFloat(teamCapitalInput);
+                                                                    if (!amt || amt <= 0) return toast.error('Enter a valid amount');
+                                                                    setTeamStartingCapital(amt)
+                                                                        .then(() => toast.success(`Starting capital set to $${amt.toLocaleString()}`))
+                                                                        .catch(e => toast.error(e?.response?.data?.detail || 'Failed'));
+                                                                }}
+                                                                style={{ padding: '0 1rem', background: '#000', color: '#FFF', border: 'none', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer', flexShrink: 0 }}
+                                                            >
+                                                                SET
+                                                            </button>
+                                                        </div>
+                                                        <div style={{ fontSize: '0.68rem', color: '#9CA3AF', marginTop: '3px' }}>
+                                                            Current: ${(marketState?.team_starting_capital ?? 1000000).toLocaleString()}
+                                                        </div>
+                                                    </div>
                                                     <form onSubmit={handleCreateTeam}>
                                                         <div style={{ marginBottom: '1rem' }}>
                                                             <label className="text-label">Team Name</label>
@@ -721,7 +1219,50 @@ export default function Dashboard() {
                                                     <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Global Controls</h2>
                                                     <div className="fintech-card">
                                                         <button onClick={handleNextTurn} className="btn" style={{ width: '100%', background: '#000', color: '#FFF', marginBottom: '0.75rem' }}>ADVANCE FISCAL YEAR</button>
-                                                        <button onClick={handleNextQuarter} className="btn" style={{ width: '100%', background: '#FFF', color: '#D1202F', border: '2px solid #D1202F', marginBottom: '1rem', fontWeight: 700 }}>ADVANCE QUARTER</button>
+                                                        <button onClick={handleNextQuarter} className="btn" style={{ width: '100%', background: '#FFF', color: '#D1202F', border: '2px solid #D1202F', marginBottom: '0.75rem', fontWeight: 700 }}>ADVANCE QUARTER</button>
+                                                        <button
+                                                            onClick={handleSeedHistory}
+                                                            disabled={marketState?.current_year > 0}
+                                                            className="btn"
+                                                            style={{ width: '100%', marginBottom: '0.75rem', background: marketState?.current_year > 0 ? '#E5E7EB' : '#059669', color: marketState?.current_year > 0 ? '#9CA3AF' : '#FFF', fontWeight: 700, cursor: marketState?.current_year > 0 ? 'not-allowed' : 'pointer' }}
+                                                            title={marketState?.current_year > 0 ? 'Already seeded' : 'Load 2 years of price history + news'}
+                                                        >
+                                                            {marketState?.current_year > 0 ? '✅ HISTORY LOADED (Y' + marketState.current_year + ' Q' + marketState.current_quarter + ')' : '📈 LOAD GAME HISTORY'}
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setShowSettleModal(true)}
+                                                            className="btn"
+                                                            style={{ width: '100%', marginBottom: '1rem', background: '#000', color: '#FFF', border: '2px solid #000', fontWeight: 700 }}
+                                                        >
+                                                            ⚖️ SETTLE ALL DEBTS
+                                                        </button>
+                                                        <button
+                                                            onClick={() => setShowResetModal(true)}
+                                                            className="btn"
+                                                            style={{ width: '100%', marginBottom: '1rem', background: '#FFF', color: '#D1202F', border: '2px solid #D1202F', fontWeight: 700 }}
+                                                        >
+                                                            🔄 RESET GAME
+                                                        </button>
+                                                                            <div style={{ marginTop: '1.5rem', background: '#f8f9fa', padding: '1rem', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                                                                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                                                                                    <h3 style={{ fontSize: '0.9rem', margin: 0, color: '#000', fontWeight: 600 }}>AUTO-ADVANCE QUARTER</h3>
+                                                                                    <label className="toggle-switch">
+                                                                                        <input type="checkbox" checked={autoAdvanceEnabled} onChange={(e) => setAutoAdvanceEnabled(e.target.checked)} />
+                                                                                        <span className="slider round"></span>
+                                                                                    </label>
+                                                                                </div>
+                                                                                {autoAdvanceEnabled && (
+                                                                                    <div>
+                                                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                                                                                            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>Interval (Minutes):</span>
+                                                                                            <input type="number" min="1" max="60" value={autoAdvanceMin} onChange={(e) => setAutoAdvanceMin(parseInt(e.target.value) || 1)} style={{ width: '60px', padding: '0.25rem', border: '1px solid #ccc', borderRadius: '4px' }} />
+                                                                                        </div>
+                                                                                        <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#D1202F', textAlign: 'center' }}>
+                                                                                            {Math.floor(timeRemainingDisplay / 60)}:{(timeRemainingDisplay % 60).toString().padStart(2, '0')}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
                                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                                                             <button onClick={() => handleShock('INFLATION', 'HINT')} className="btn btn-secondary">HINT INFLATION</button>
                                                             <button onClick={() => handleShock('RECESSION', 'HINT')} className="btn btn-secondary">HINT RECESSION</button>
@@ -730,6 +1271,51 @@ export default function Dashboard() {
                                                 </div>
                                             </div>
                                         </div>
+
+                                        {/* Banker Approvals */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminBankerApprovals />
+                                        </div>
+
+                                        {/* Banker Management */}
+                                        <div style={{ marginBottom: '2rem' }}>
+                                            <AdminBankerManagement />
+                                        </div>
+
+                                        {/* Flagged Trades */}
+                                        {flaggedTrades.length > 0 && (
+                                            <div style={{ marginBottom: '2rem' }}>
+                                                <div className="fintech-card" style={{ background: '#FFF' }}>
+                                                    <div className="text-label" style={{ marginBottom: '1rem', color: '#D1202F' }}>FLAGGED TRADES ({flaggedTrades.length})</div>
+                                                    <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse' }}>
+                                                        <thead>
+                                                            <tr style={{ background: '#1A0000', color: '#FFF' }}>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#FFF' }}>BUYER</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#FFF' }}>SELLER</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#FFF' }}>ASSET</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#FFF' }}>QTY</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'right', color: '#FFF' }}>PRICE</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#FFF' }}>REASON</th>
+                                                                <th style={{ padding: '0.4rem 0.6rem', textAlign: 'left', color: '#FFF' }}>TIME</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {flaggedTrades.map(t => (
+                                                                <tr key={t.id} style={{ borderBottom: '1px solid #FEE2E2', background: '#FFF5F5' }}>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>{t.buyer}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>{t.seller}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem' }}>{t.asset}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{t.quantity}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${t.price?.toFixed(2)}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', color: '#D1202F', fontSize: '0.72rem' }}>{t.flag_reason}</td>
+                                                                    <td style={{ padding: '0.4rem 0.6rem', color: '#888', fontSize: '0.7rem' }}>{new Date(t.timestamp).toLocaleString()}</td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
 
@@ -746,15 +1332,19 @@ export default function Dashboard() {
                                                         <th style={{ color: '#FFF', textAlign: 'right' }}>MARKET PRICE</th>
                                                         <th style={{ color: '#FFF', textAlign: 'right' }}>MARKET VALUE</th>
                                                         <th style={{ color: '#FFF', textAlign: 'right' }}>UNREALIZED P&L</th>
+                                                        {user?.role === 'team' && <th style={{ color: '#FFF', textAlign: 'center' }}>ACTIONS</th>}
                                                     </tr>
                                                 </thead>
                                                 <tbody>
                                                     {portfolio.length === 0 ? (
-                                                        <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>No active positions.</td></tr>
+                                                        <tr><td colSpan={user?.role === 'team' ? 7 : 6} style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>No active positions.</td></tr>
                                                     ) : (
                                                         portfolio.map(holding => (
                                                             <tr key={holding.ticker} style={{ borderBottom: '1px solid #E5E7EB' }}>
-                                                                <td style={{ fontWeight: 600 }}>{holding.ticker}</td>
+                                                                <td style={{ fontWeight: 600 }}>
+                                                                    {holding.ticker}
+                                                                    <div style={{ fontSize: '0.7rem', color: '#888', fontWeight: 400 }}>{holding.name}</div>
+                                                                </td>
                                                                 <td className="mono-num" style={{ textAlign: 'right' }}>{holding.quantity}</td>
                                                                 <td className="mono-num" style={{ textAlign: 'right' }}>${holding.avg_cost.toFixed(2)}</td>
                                                                 <td className="mono-num" style={{ textAlign: 'right' }}>${holding.current_price.toFixed(2)}</td>
@@ -762,6 +1352,40 @@ export default function Dashboard() {
                                                                 <td className="mono-num" style={{ textAlign: 'right', color: holding.unrealized_pnl >= 0 ? '#10B981' : '#EF4444' }}>
                                                                     ${holding.unrealized_pnl >= 0 ? '+' : ''}{holding.unrealized_pnl.toFixed(2)}
                                                                 </td>
+                                                                {user?.role === 'team' && (
+                                                                    <td style={{ textAlign: 'center' }}>
+                                                                        <div style={{ display: 'flex', gap: '0.4rem', justifyContent: 'center' }}>
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setActiveTab('marketplace');
+                                                                                    setNotifications(prev => ({ ...prev, marketplace: false }));
+                                                                                    // Pre-fill a buy intent
+                                                                                    toast.info(`Navigate to Marketplace to BUY more ${holding.ticker}`);
+                                                                                }}
+                                                                                style={{
+                                                                                    padding: '0.3rem 0.6rem', fontSize: '0.65rem', fontWeight: 700,
+                                                                                    background: '#10B981', color: '#FFF', border: 'none', cursor: 'pointer',
+                                                                                    letterSpacing: '0.03em'
+                                                                                }}
+                                                                            >
+                                                                                BUY
+                                                                            </button>
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    setAuctionListModal({ ticker: holding.ticker, maxQty: holding.quantity });
+                                                                                    setAuctionListForm({ quantity: '', reservePrice: '' });
+                                                                                }}
+                                                                                style={{
+                                                                                    padding: '0.3rem 0.6rem', fontSize: '0.65rem', fontWeight: 700,
+                                                                                    background: '#EF4444', color: '#FFF', border: 'none', cursor: 'pointer',
+                                                                                    letterSpacing: '0.03em'
+                                                                                }}
+                                                                            >
+                                                                                SELL
+                                                                            </button>
+                                                                        </div>
+                                                                    </td>
+                                                                )}
                                                             </tr>
                                                         ))
                                                     )}
@@ -817,33 +1441,50 @@ export default function Dashboard() {
                                         )}
 
                                         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
+                                            {/* Asset Price Lookup — Inline Dropdown */}
+                                            <div className="fintech-card" style={{ background: '#FFF', display: 'flex', alignItems: 'center', gap: '1.5rem', flexWrap: 'wrap' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                                                    <span className="text-label" style={{ marginBottom: 0, whiteSpace: 'nowrap' }}>LIVE PRICE</span>
+                                                    <select
+                                                        className="input-field mono-num"
+                                                        value={selectedAssetTickerRef.current || selectedAsset?.ticker || ''}
+                                                        onChange={e => {
+                                                            const ticker = e.target.value;
+                                                            const asset = assets.find(a => a.ticker === ticker);
+                                                            selectedAssetTickerRef.current = ticker;
+                                                            setSelectedAsset(asset);
+                                                        }}
+                                                        style={{ maxWidth: '220px', padding: '0.5rem 0.75rem', fontSize: '0.85rem' }}
+                                                    >
+                                                        {assets.map(a => <option key={a.ticker} value={a.ticker}>{a.ticker} — {a.name}</option>)}
+                                                    </select>
+                                                </div>
+                                                {selectedAsset && (
+                                                    <div style={{ display: 'flex', gap: '2rem', alignItems: 'baseline' }}>
+                                                        <div>
+                                                            <div style={{ fontSize: '0.65rem', color: '#888', textTransform: 'uppercase', fontWeight: 600 }}>Market Price</div>
+                                                            <div className="mono-num" style={{ fontSize: '1.4rem', fontWeight: 700 }}>${selectedAsset.current_price.toFixed(2)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div style={{ fontSize: '0.65rem', color: '#888', textTransform: 'uppercase', fontWeight: 600 }}>Base Price</div>
+                                                            <div className="mono-num" style={{ fontSize: '1rem', color: '#666' }}>${selectedAsset.base_price.toFixed(2)}</div>
+                                                        </div>
+                                                        <div>
+                                                            <div style={{ fontSize: '0.65rem', color: '#888', textTransform: 'uppercase', fontWeight: 600 }}>Change</div>
+                                                            <div className="mono-num" style={{
+                                                                fontSize: '1rem', fontWeight: 600,
+                                                                color: selectedAsset.current_price >= selectedAsset.base_price ? '#10B981' : '#EF4444'
+                                                            }}>
+                                                                {selectedAsset.current_price >= selectedAsset.base_price ? '+' : ''}
+                                                                {(((selectedAsset.current_price - selectedAsset.base_price) / selectedAsset.base_price) * 100).toFixed(1)}%
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+
                                             {/* Private Trading Interface (Full Width) */}
                                             <PrivateTrading user={user} marketState={marketState} assets={assets} />
-
-                                            {/* Market Reference (Order Book / Prices) - Optional, kept for reference */}
-                                            <div>
-                                                <h2 style={{ marginBottom: '1.5rem', textTransform: 'uppercase' }}>Reference Prices</h2>
-                                                <div className="fintech-card">
-                                                    <table style={{ width: '100%' }}>
-                                                        <thead>
-                                                            <tr style={{ background: '#F9FAFB', textAlign: 'left' }}>
-                                                                <th style={{ padding: '0.5rem' }}>ASSET</th>
-                                                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>PRICE</th>
-                                                                <th style={{ padding: '0.5rem', textAlign: 'right' }}>CHANGE</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {assets.map(a => (
-                                                                <tr key={a.id} style={{ borderBottom: '1px solid #E5E7EB' }}>
-                                                                    <td style={{ padding: '0.5rem', fontWeight: 600 }}>{a.ticker}</td>
-                                                                    <td className="mono-num" style={{ padding: '0.5rem', textAlign: 'right' }}>${a.current_price.toFixed(2)}</td>
-                                                                    <td className="mono-num" style={{ padding: '0.5rem', textAlign: 'right', color: '#666' }}>--</td>
-                                                                </tr>
-                                                            ))}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -852,12 +1493,16 @@ export default function Dashboard() {
                                     <AuctionHouse user={user} marketState={marketState} onUpdate={fetchData} lastUpdate={lastUpdate} />
                                 )}
 
+                                {activeTab === 'secondary_mkt' && (
+                                    <SecondaryAuctionHall user={user} lastUpdate={lastUpdate} />
+                                )}
+
                                 {activeTab === 'treasury' && (
                                     <Treasury user={user} onUpdate={fetchData} />
                                 )}
 
                                 {activeTab === 'credit' && (
-                                    <CreditNetwork user={user} marketState={marketState} />
+                                    <CreditNetwork user={user} marketState={marketState} assets={assets} />
                                 )}
 
                                 {activeTab === 'news' && (

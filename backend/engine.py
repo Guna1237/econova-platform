@@ -12,29 +12,31 @@ class NewsCaster:
             "Trading volume stable; investors maintain diversified positions."
         ],
         "INFLATION_HINT": [
-            "Bond yields tick upward as central banks discuss policy.",
-            "Commodity prices rise slightly; manufacturing costs increase.",
-            "Logistics firms report minor delays in shipping routes."
+            "Bond yields climb for the third consecutive week as traders price in tighter monetary policy ahead.",
+            "Shipping costs from Asia up 22% this quarter. Supply chain stress is returning across key corridors.",
+            "PPI data shows input costs accelerating at the fastest pace in 18 months. Margins under pressure.",
+            "Freight indices surge on port congestion. Wholesale prices creeping higher across categories."
         ],
         "INFLATION_CRASH": [
-            "Central Bank hikes rates aggressively to combat spiraling costs.",
-            "Liquidity dries up; Bond & Tech sectors hit by selling pressure.",
-            "Consumer spending contracts sharply on rate hike news."
+            "Central Bank hikes rates aggressively to combat spiraling costs. Growth assets under severe pressure.",
+            "Liquidity dries up as monetary tightening accelerates. Tech and bond sectors face selling pressure.",
+            "Consumer spending contracts sharply on rate hike news. Credit conditions tighten across the board."
         ],
         "RECESSION_HINT": [
-            "Manufacturing output slows for the second consecutive quarter.",
-            "Consumer confidence index drops.",
-            "Corporate hiring freezes hint at economic slowdown."
+            "PMI manufacturing index falls below 50 for the second consecutive month. Economists revise forecasts lower.",
+            "Consumer confidence slips to a 14-month low. Spending growth is decelerating across retail segments.",
+            "Credit card delinquencies tick upward. Banks quietly tighten lending criteria for new borrowers.",
+            "Yield curve flattening continues. Fixed income markets signaling caution on near-term growth."
         ],
         "RECESSION_CRASH": [
-            "Global Recession declared following weak GDP data.",
-            "Demand collapses; Oil & Real Estate sectors plummet.",
-            "Corporate earnings miss targets; layoffs accelerate."
+            "Global Recession declared following weak GDP data. Demand collapses; Oil & Real Estate sectors plummet.",
+            "Corporate earnings miss targets by wide margins; layoffs accelerate. Risk-off positioning intensifies.",
+            "Credit markets seize up as default fears spread. Liquidity premium on safe-haven assets surges."
         ],
         "RECOVERY": [
-            "Market shows signs of bottoming out; value investors return.",
-            "Green shoots: Economic indicators stabilize after downturn.",
-            "Panic subsides as volatility index drops."
+            "Market shows signs of bottoming out; value investors return. Volatility index retreats from recent highs.",
+            "Green shoots: Economic indicators stabilize after the downturn. Business confidence rebounds cautiously.",
+            "Panic subsides as credit spreads compress. Central Bank signals policy pivot; risk appetite slowly returns."
         ]
     }
     
@@ -133,7 +135,7 @@ class MarketEngine:
                 if asset.ticker not in NewsCaster.MICRO_TEMPLATES: continue
                 existing = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
                 if len(existing) >= 1: continue
-                if random.random() < 0.15:
+                if random.random() < 0.20:
                     templates = NewsCaster.MICRO_TEMPLATES.get(asset.ticker, [])
                     if templates:
                         desc, impact, duration = random.choice(templates)
@@ -156,13 +158,6 @@ class MarketEngine:
                         )
                         self.session.add(news)
 
-        # Check for recovery timing
-        if state.shock_stage == 'CRASH' and state.last_shock_year:
-            years_since_shock = next_year - state.last_shock_year
-            if years_since_shock >= 3 and next_q == 1:
-                state.shock_stage = 'RECOVERY'
-                state.news_feed = NewsCaster.get_headline(state.shock_type, 'RECOVERY')
-
         # 1. Update Asset Prices
         assets = self.session.exec(select(Asset)).all()
         for asset in assets:
@@ -176,33 +171,62 @@ class MarketEngine:
                 continue
             
             shock_factor = 0.0
-            
-            # Shock Logic
+
+            # Shock Logic — each asset reacts based on real-world fundamentals
             if state.shock_stage == 'WARNING':
-                shock_factor = 0.01 * quarter_scale
+                # Pre-shock jitters: market sells risk assets on uncertainty
+                shock_factor = -0.02 * quarter_scale
             elif state.shock_stage == 'CRASH':
                 beta = asset.macro_sensitivity
                 if state.shock_type == 'INFLATION':
-                    if asset.ticker == 'GOLD': shock_factor = 0.12 * quarter_scale
-                    elif asset.ticker == 'NVDA': shock_factor = -0.15 * quarter_scale
-                    else: shock_factor = -0.10 * abs(beta) * quarter_scale
+                    # Inflation: commodities win, rate-sensitive and high-multiple assets lose
+                    if asset.ticker == 'GOLD':   shock_factor =  0.12 * quarter_scale  # classic inflation hedge
+                    elif asset.ticker == 'BRENT': shock_factor =  0.10 * quarter_scale  # oil drives inflation, benefits strongly
+                    elif asset.ticker == 'NVDA':  shock_factor = -0.15 * quarter_scale  # high-multiple tech crushed by rising rates
+                    elif asset.ticker == 'REITS': shock_factor = -0.06 * quarter_scale  # higher rates compress property valuations
+                    else:                         shock_factor = -0.10 * abs(beta) * quarter_scale
                 elif state.shock_type == 'RECESSION':
-                    if asset.ticker in ['BRENT', 'REITS']: shock_factor = -0.15 * quarter_scale
-                    elif asset.ticker == 'GOLD': shock_factor = 0.05 * quarter_scale
-                    else: shock_factor = -0.12 * abs(beta) * quarter_scale
+                    # Recession: demand collapses for cyclicals; safe havens see inflows
+                    if asset.ticker == 'GOLD':               shock_factor =  0.08 * quarter_scale  # fear + central bank buying
+                    elif asset.ticker in ['BRENT', 'REITS']: shock_factor = -0.15 * quarter_scale  # demand destruction
+                    else:                                     shock_factor = -0.12 * abs(beta) * quarter_scale
                 else:
                     shock_factor = -0.10 * abs(beta) * quarter_scale
             elif state.shock_stage == 'RECOVERY':
-                shock_factor = (0.15 + (random.random() * 0.10)) * quarter_scale
+                # Recovery is gradual and asset-specific, not a uniform bounce
+                shock_factor = (0.08 + (random.random() * 0.07)) * quarter_scale
 
-            # Mean Reversion
-            price_ratio = asset.current_price / asset.base_price
+            # Mean Reversion — pull toward rolling 4-quarter average, or base_price if not enough history
+            recent_history = self.session.exec(
+                select(PriceHistory)
+                .where(PriceHistory.asset_id == asset.id)
+                .order_by(PriceHistory.id.desc())
+                .limit(4)
+            ).all()
+            reversion_anchor = (
+                sum(r.price for r in recent_history) / len(recent_history)
+                if len(recent_history) >= 4 else asset.base_price
+            )
+            price_ratio = asset.current_price / reversion_anchor if reversion_anchor > 0 else 1.0
             k_reversion = 0.0
-            if price_ratio < 0.5: k_reversion = 0.15 * quarter_scale
-            elif price_ratio < 0.8: k_reversion = 0.08 * quarter_scale
+            if price_ratio < 0.5:   k_reversion =  0.15 * quarter_scale
+            elif price_ratio < 0.8: k_reversion =  0.08 * quarter_scale
             elif price_ratio > 2.0: k_reversion = -0.10 * quarter_scale
             elif price_ratio > 1.5: k_reversion = -0.05 * quarter_scale
-                
+
+            # Momentum — last quarter's direction has a 15% carry-forward effect
+            momentum = 0.0
+            prev_entries = self.session.exec(
+                select(PriceHistory)
+                .where(PriceHistory.asset_id == asset.id)
+                .order_by(PriceHistory.id.desc())
+                .limit(2)
+            ).all()
+            if len(prev_entries) >= 2 and prev_entries[1].price > 0:
+                last_return = (prev_entries[0].price - prev_entries[1].price) / prev_entries[1].price
+                momentum = last_return * 0.15
+                momentum = max(min(momentum, 0.03), -0.03)
+
             # Micro Event Impact
             micro_impact = 0.0
             active_events = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
@@ -215,20 +239,24 @@ class MarketEngine:
                     else:
                         self.session.add(event)
 
-            # Calculation
-            # Calculation - Reduced noise for stability
+            # Final growth calculation - Unbounded
             noise = random.gauss(0, asset.volatility * 0.8 * math.sqrt(quarter_scale))
-            if random.random() < 0.05: # 5% chance of extra random swing
-                noise += random.choice([-0.03, 0.03])
-            growth = (asset.base_cagr * quarter_scale) + shock_factor + k_reversion + micro_impact + noise
-            
-            # Cap single-quarter changes
-            growth = max(min(growth, 0.25), -0.20)
+            if random.random() < 0.05:  # 5% chance of an extra surprise swing
+                noise += random.choice([-0.02, 0.02])
+
+            # Investor sentiment multiplier (admin-controlled dial)
+            SENTIMENT_MULT = {"BULLISH": 1.25, "NEUTRAL": 1.0, "BEARISH": 0.75}
+            sent_mult = SENTIMENT_MULT.get(getattr(state, 'sentiment', 'NEUTRAL'), 1.0)
+            noise = noise * sent_mult
+            cagr_component = asset.base_cagr * quarter_scale
+            cagr_component = cagr_component + (cagr_component * (sent_mult - 1.0) * 0.3)
+
+            growth = cagr_component + shock_factor + k_reversion + momentum + micro_impact + noise
             
             new_price = asset.current_price * (1 + growth)
-            min_price = asset.base_price * 0.20
-            max_price = asset.base_price * 3.00
-            new_price = max(min_price, min(max_price, new_price))
+            
+            # Absolute hard floor to prevent zero/negative price technical errors
+            new_price = max(0.10, new_price)
             
             # Record quarterly history
             self.session.add(PriceHistory(asset_id=asset.id, year=next_year, quarter=next_q, price=new_price))
@@ -245,17 +273,27 @@ class MarketEngine:
             interest = loan.principal * (loan.interest_rate / 100.0) * quarter_scale
             
             if borrower.cash < interest:
-                # Grace period: 2nd consecutive miss = default
+                # Escalating warnings — teams are NEVER auto-frozen during the game.
+                # End-of-game settlement handles actual debt recovery.
                 loan.missed_quarters += 1
-                if loan.missed_quarters >= 2:
-                    borrower.is_frozen = True
-                    loan.status = LoanStatus.DEFAULTED
-                    state.news_feed = f"BANKRUPTCY ALERT: {borrower.username} defaulted on loan!"
+                missed = loan.missed_quarters
+                if missed == 1:
+                    state.news_feed = (
+                        f"⚠️ DEBT WARNING: {borrower.username} could not make their interest payment. "
+                        f"({missed} missed payment — settle outstanding debt to avoid end-of-game liquidation.)"
+                    )
+                elif missed == 2:
+                    state.news_feed = (
+                        f"🔴 FINAL WARNING: {borrower.username} has missed {missed} consecutive interest payments! "
+                        f"Assets are at risk of forced liquidation at end-of-game settlement."
+                    )
                 else:
-                    # First miss - warn but don't freeze yet
-                    state.news_feed = f"WARNING: {borrower.username} missed interest payment (Quarter {loan.missed_quarters}/2 before default)."
-                self.session.add(borrower)
+                    state.news_feed = (
+                        f"🚨 CRITICAL DEBT ALERT: {borrower.username} has missed {missed} payments. "
+                        f"Full portfolio liquidation imminent at end-of-game settlement."
+                    )
                 self.session.add(loan)
+                # Note: borrower.is_frozen is NOT set — team keeps trading.
             else:
                 borrower.cash -= interest
                 lender.cash += interest
@@ -267,6 +305,9 @@ class MarketEngine:
                 self.session.add(lender)
 
 
+        # Run market maker bots after price updates
+        self.run_bots(state, next_year, next_q)
+
         state.current_year = next_year
         state.current_quarter = next_q
         self.session.add(state)
@@ -276,6 +317,161 @@ class MarketEngine:
         """Advance simulation by one full year (4 quarters)"""
         for _ in range(4):
             self.step_quarter()
+
+    def trigger_recovery(self):
+        """Admin-triggered: manually move market from CRASH to RECOVERY."""
+        state = self.get_state()
+        state.shock_stage = 'RECOVERY'
+        state.news_feed = NewsCaster.get_headline(state.shock_type, 'RECOVERY')
+        self.session.add(state)
+        self.session.commit()
+
+    def reset_shock(self):
+        """Admin-triggered: fully reset shock state back to NORMAL."""
+        state = self.get_state()
+        state.shock_stage = 'NORMAL'
+        state.shock_type = 'NONE'
+        state.last_shock_year = None
+        state.news_feed = NewsCaster.get_headline('NONE', 'NORMAL')
+        self.session.add(state)
+        self.session.commit()
+
+    def set_sentiment(self, sentiment: str):
+        """Admin-controlled: set investor sentiment dial."""
+        if sentiment not in ('BULLISH', 'NEUTRAL', 'BEARISH'):
+            raise ValueError("Invalid sentiment value")
+        state = self.get_state()
+        state.sentiment = sentiment
+        self.session.add(state)
+        self.session.commit()
+
+    def toggle_bots(self):
+        """Admin-controlled: flip market maker bots on/off."""
+        state = self.get_state()
+        state.bots_enabled = not state.bots_enabled
+        self.session.add(state)
+        self.session.commit()
+        return state.bots_enabled
+
+    def initialize_bots(self):
+        """Create market maker bot accounts if they don't already exist."""
+        from .auth import get_password_hash
+        bot_configs = [
+            ("market_maker_1", 150000.0),
+            ("market_maker_2", 150000.0),
+        ]
+        for username, cash in bot_configs:
+            existing = self.session.exec(select(User).where(User.username == username)).first()
+            if not existing:
+                bot = User(
+                    username=username,
+                    hashed_password=get_password_hash("bot_not_used_" + username),
+                    role=Role.TEAM,
+                    cash=cash,
+                )
+                self.session.add(bot)
+        self.session.commit()
+
+    def run_bots(self, state: MarketState, next_year: int, next_q: int):
+        """Execute rule-based market maker bot trades. Called after price updates each quarter."""
+        if not getattr(state, 'bots_enabled', False):
+            return
+
+        assets = self.session.exec(select(Asset)).all()
+        asset_map = {a.ticker: a for a in assets}
+
+        bot1 = self.session.exec(select(User).where(User.username == "market_maker_1")).first()
+        bot2 = self.session.exec(select(User).where(User.username == "market_maker_2")).first()
+
+        BOT_CASH_FLOOR = 20000.0
+        MAX_HOLD = {"market_maker_1": 20, "market_maker_2": 15}
+
+        def get_holding(user, asset):
+            h = self.session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
+            return h
+
+        def bot_buy(bot, asset, qty):
+            cost = asset.current_price * qty
+            if bot.cash - cost < BOT_CASH_FLOOR:
+                return
+            bot.cash -= cost
+            h = get_holding(bot, asset)
+            if h:
+                h.avg_cost = ((h.quantity * h.avg_cost) + cost) / (h.quantity + qty)
+                h.quantity += qty
+                self.session.add(h)
+            else:
+                self.session.add(Holding(user_id=bot.id, asset_id=asset.id, quantity=qty, avg_cost=asset.current_price))
+            self.session.add(bot)
+            # Small upward price nudge: 1% per unit, max 5%
+            trade_impact = min(0.05, 0.01 * qty)
+            asset.current_price = asset.current_price * (1 + trade_impact)
+            self.session.add(asset)
+
+        def bot_sell(bot, asset, qty):
+            h = get_holding(bot, asset)
+            if not h or h.quantity < qty:
+                return
+            proceeds = asset.current_price * qty
+            bot.cash += proceeds
+            h.quantity -= qty
+            if h.quantity == 0:
+                self.session.delete(h)
+            else:
+                self.session.add(h)
+            self.session.add(bot)
+            # Small downward price nudge: 1% per unit, max 5%
+            trade_impact = min(0.05, 0.01 * qty)
+            asset.current_price = asset.current_price * (1 - trade_impact)
+            self.session.add(asset)
+
+        # --- BOT 1: Value trader ---
+        if bot1:
+            quarter_spend_limit = bot1.cash * 0.15
+            spent = 0.0
+            for ticker, asset in asset_map.items():
+                if ticker == 'TBILL':
+                    continue
+                # During CRASH: only buy GOLD (safe-haven)
+                if state.shock_stage == 'CRASH' and ticker != 'GOLD':
+                    continue
+                discount = (asset.base_price - asset.current_price) / asset.base_price
+                h = get_holding(bot1, asset)
+                held_qty = h.quantity if h else 0
+                if discount > 0.12 and held_qty < MAX_HOLD["market_maker_1"]:
+                    qty = random.randint(5, 8)
+                    qty = min(qty, MAX_HOLD["market_maker_1"] - held_qty)
+                    cost = asset.current_price * qty
+                    if spent + cost <= quarter_spend_limit:
+                        bot_buy(bot1, asset, qty)
+                        spent += cost
+                elif discount < -0.18 and held_qty > 0:
+                    qty = min(random.randint(3, 5), held_qty)
+                    bot_sell(bot1, asset, qty)
+
+        # --- BOT 2: Contrarian / momentum trader ---
+        if bot2:
+            for ticker, asset in asset_map.items():
+                if ticker == 'TBILL':
+                    continue
+                prev_entries = self.session.exec(
+                    select(PriceHistory)
+                    .where(PriceHistory.asset_id == asset.id)
+                    .order_by(PriceHistory.id.desc())
+                    .limit(2)
+                ).all()
+                if len(prev_entries) < 2 or prev_entries[1].price <= 0:
+                    continue
+                last_return = (prev_entries[0].price - prev_entries[1].price) / prev_entries[1].price
+                h = get_holding(bot2, asset)
+                held_qty = h.quantity if h else 0
+                if last_return < -0.08 and state.shock_stage != 'CRASH' and held_qty < MAX_HOLD["market_maker_2"]:
+                    qty = random.randint(3, 5)
+                    qty = min(qty, MAX_HOLD["market_maker_2"] - held_qty)
+                    bot_buy(bot2, asset, qty)
+                elif last_return > 0.12 and held_qty > 0:
+                    qty = min(random.randint(2, 3), held_qty)
+                    bot_sell(bot2, asset, qty)
 
     def trigger_shock(self, type_: str, action: str):
         state = self.get_state()
@@ -312,8 +508,16 @@ class MarketEngine:
         for lot in old_lots:
             self.session.delete(lot)
         
-        # Create new lots based on configuration
-        lot_config = self.LOT_CONFIGS.get(ticker, [(10, 1.0)])  # Default config
+        # Create new lots — prefer admin-configured layout, fall back to LOT_CONFIGS
+        state = self.session.exec(select(MarketState)).first()
+        custom = (state.auction_config or {}).get(ticker) if state else None
+        if custom:
+            num_lots = int(custom.get("num_lots", 4))
+            units = int(custom.get("units_per_lot", 10))
+            premium = float(custom.get("last_lot_premium", 1.0))
+            lot_config = [(units, 1.0)] * (num_lots - 1) + [(units, premium)]
+        else:
+            lot_config = self.LOT_CONFIGS.get(ticker, [(10, 1.0)])  # Default config
         
         for lot_num, (quantity, price_mult) in enumerate(lot_config, 1):
             lot = AuctionLot(
@@ -339,38 +543,36 @@ class MarketEngine:
     
     def place_bid(self, user: User, lot_id: int, amount: float):
         """Place a bid on a specific lot"""
-        state = self.get_state()
-        ticker = state.active_auction_asset
-        
-        if not ticker:
-            raise ValueError("No active auction")
-        
-        # Check if asset matches
-        # (Implicitly checked by lot association, but good for safety)
-        
         from .models import AuctionLot
         lot = self.session.get(AuctionLot, lot_id)
         if not lot:
             raise ValueError("Lot not found")
-            
-        if lot.asset_ticker != ticker:
-            raise ValueError("Lot does not belong to active auction asset")
-            
+
+        # Admin-created lots (no seller_id) require an active auction for that asset.
+        # Secondary lots (seller_id set) are always-open — no active auction needed.
+        if not lot.seller_id:
+            state = self.get_state()
+            ticker = state.active_auction_asset
+            if not ticker:
+                raise ValueError("No active auction")
+            if lot.asset_ticker != ticker:
+                raise ValueError("Lot does not belong to active auction asset")
+
         if lot.status != LotStatus.ACTIVE:
             raise ValueError("Lot is not active for bidding")
-        
+
         # Check if bid is at least base price
         if amount < lot.base_price:
             raise ValueError(f"Bid must be at least ${lot.base_price:,.2f}")
-        
+
         total_cost = amount * lot.quantity
         if user.cash < total_cost:
             raise ValueError(f"Insufficient funds. Need ${total_cost:,.0f}")
-        
+
         # Create bid
         bid = AuctionBid(
             user_id=user.id,
-            asset_ticker=ticker,
+            asset_ticker=lot.asset_ticker,
             lot_id=lot_id,
             amount=amount,
             quantity=lot.quantity
@@ -389,14 +591,15 @@ class MarketEngine:
         if not asset:
             return "Asset not found"
         
-        # Get the currently ACTIVE lot
+        # Get the currently ACTIVE admin-created lot (seller_id is None)
         active_lot = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
                 AuctionLot.status == LotStatus.ACTIVE,
+                AuctionLot.seller_id.is_(None),
             )
         ).first()
-        
+
         if not active_lot:
             return "No active lot to resolve"
         
@@ -440,7 +643,9 @@ class MarketEngine:
                     seller = self.session.get(User, active_lot.seller_id)
                     if seller:
                         revenue = total_cost
-                        cost_basis = (active_lot.seller_cost_basis or 0.0) * active_lot.quantity
+                        # Fall back to base_price (reserve price) if no cost basis recorded
+                        cost_per_unit = active_lot.seller_cost_basis if active_lot.seller_cost_basis is not None else active_lot.base_price
+                        cost_basis = cost_per_unit * active_lot.quantity
                         capital_gain = revenue - cost_basis
                         fee = capital_gain * 0.20 if capital_gain > 0 else 500.0
                         net_payout = revenue - fee
@@ -458,8 +663,8 @@ class MarketEngine:
                 self.session.add(winner)
                 self.session.add(active_lot)
                 
-                # Incremental price nudge
-                asset.current_price = (0.95 * asset.current_price) + (0.05 * winner_bid.amount)
+                # Price impact matches max trade impact
+                asset.current_price = (0.70 * asset.current_price) + (0.30 * winner_bid.amount)
                 self.session.add(asset)
             else:
                 active_lot.status = LotStatus.CANCELLED
@@ -497,16 +702,109 @@ class MarketEngine:
         # Do NOT auto-advance. Admin must call open_next_lot or end_auction manually.
         self.session.commit()
         
-        # Check if there are more pending lots so frontend can show the button
+        # Check if there are more admin-created pending lots so frontend can show the button
         pending_lots = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
                 AuctionLot.status == LotStatus.PENDING,
+                AuctionLot.seller_id.is_(None),
                 AuctionLot.lot_number > active_lot.lot_number
             )
         ).all()
         has_next = len(pending_lots) > 0
         return {"message": results_msg, "has_next_lot": has_next, "lots_remaining": len(pending_lots)}
+
+    def resolve_secondary_lot(self, lot_id: int):
+        """Resolve a specific user-listed secondary lot by ID (admin action)."""
+        from .models import AuctionLot
+        lot = self.session.get(AuctionLot, lot_id)
+        if not lot:
+            return {"error": "Lot not found"}
+        if not lot.seller_id:
+            return {"error": "Not a secondary lot — use resolve_auction() for admin lots"}
+        if lot.status != LotStatus.ACTIVE:
+            return {"error": f"Lot is not active (status: {lot.status.value})"}
+
+        asset = self.session.exec(select(Asset).where(Asset.ticker == lot.asset_ticker)).first()
+        if not asset:
+            return {"error": "Asset not found"}
+
+        bids = self.session.exec(
+            select(AuctionBid).where(AuctionBid.lot_id == lot.id).order_by(AuctionBid.amount.desc())
+        ).all()
+
+        if bids:
+            winner_bid = bids[0]
+            winner = self.session.get(User, winner_bid.user_id)
+            total_cost = winner_bid.amount * winner_bid.quantity
+
+            if winner.cash >= total_cost:
+                winner.cash -= total_cost
+
+                holding = self.session.exec(select(Holding).where(
+                    Holding.user_id == winner.id, Holding.asset_id == asset.id
+                )).first()
+                if holding:
+                    total_val = (holding.quantity * holding.avg_cost) + total_cost
+                    new_qty = holding.quantity + winner_bid.quantity
+                    holding.avg_cost = total_val / new_qty
+                    holding.quantity = new_qty
+                    self.session.add(holding)
+                else:
+                    holding = Holding(user_id=winner.id, asset_id=asset.id, quantity=winner_bid.quantity, avg_cost=winner_bid.amount)
+                    self.session.add(holding)
+
+                seller = self.session.get(User, lot.seller_id)
+                if seller:
+                    revenue = total_cost
+                    cost_per_unit = lot.seller_cost_basis if lot.seller_cost_basis is not None else lot.base_price
+                    cost_basis = cost_per_unit * lot.quantity
+                    capital_gain = revenue - cost_basis
+                    fee = capital_gain * 0.20 if capital_gain > 0 else 500.0
+                    net_payout = revenue - fee
+                    seller.cash += net_payout
+                    self.session.add(seller)
+                    results_msg = f"Lot {lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f} (Seller payout: ${net_payout:,.0f} after fees)"
+                else:
+                    results_msg = f"Lot {lot.lot_number} SOLD to {winner.username} @ ${winner_bid.amount:,.0f}"
+
+                lot.status = LotStatus.SOLD
+                lot.winner_id = winner.id
+                lot.winning_bid = winner_bid.amount
+                self.session.add(winner)
+                self.session.add(lot)
+
+                asset.current_price = (0.70 * asset.current_price) + (0.30 * winner_bid.amount)
+                self.session.add(asset)
+            else:
+                lot.status = LotStatus.CANCELLED
+                self.session.add(lot)
+                results_msg = f"Lot {lot.lot_number} CANCELLED (Winner had insufficient funds)"
+                self._refund_secondary_lot_asset(lot, asset)
+        else:
+            lot.status = LotStatus.CANCELLED
+            self.session.add(lot)
+            results_msg = f"Lot {lot.lot_number} CLOSED (No bids)"
+            self._refund_secondary_lot_asset(lot, asset)
+
+        self.session.commit()
+        return {"message": results_msg, "status": lot.status.value}
+
+    def _refund_secondary_lot_asset(self, lot, asset):
+        """Return escrowed asset back to seller when a secondary lot is cancelled/no-bid."""
+        seller_holding = self.session.exec(select(Holding).where(
+            Holding.user_id == lot.seller_id, Holding.asset_id == asset.id
+        )).first()
+        if seller_holding:
+            seller_holding.quantity += lot.quantity
+            self.session.add(seller_holding)
+        else:
+            self.session.add(Holding(
+                user_id=lot.seller_id,
+                asset_id=asset.id,
+                quantity=lot.quantity,
+                avg_cost=lot.seller_cost_basis or 0.0
+            ))
 
     def open_next_lot(self):
         """Admin-controlled: open the next PENDING lot for bidding."""
@@ -515,11 +813,12 @@ class MarketEngine:
         if not ticker:
             return {"message": "No active auction", "opened": False}
 
-        # Make sure there's no already-active lot
+        # Make sure there's no already-active admin-created lot
         already_active = self.session.exec(
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
-                AuctionLot.status == LotStatus.ACTIVE
+                AuctionLot.status == LotStatus.ACTIVE,
+                AuctionLot.seller_id.is_(None),
             )
         ).first()
         if already_active:
@@ -529,6 +828,7 @@ class MarketEngine:
             select(AuctionLot).where(
                 AuctionLot.asset_ticker == ticker,
                 AuctionLot.status == LotStatus.PENDING,
+                AuctionLot.seller_id.is_(None),
             ).order_by(AuctionLot.lot_number)
         ).first()
 
@@ -551,10 +851,15 @@ class MarketEngine:
 
     # --- TRADING LOGIC ---
     def execute_trade(self, buyer_id: int, seller_id: int, asset_id: int, qty: int, price: float):
+        if buyer_id == seller_id:
+            raise ValueError("Self-trade not allowed")
+        state = self.session.exec(select(MarketState)).first()
+        if state and state.phase == "FINISHED":
+            raise ValueError("Trading has ended")
         buyer = self.session.get(User, buyer_id)
         seller = self.session.get(User, seller_id)
         total = qty * price
-        
+
         if buyer.cash < total: raise ValueError("Buyer broke")
         
         # Verify Seller Holding
@@ -579,11 +884,97 @@ class MarketEngine:
         else:
             self.session.add(Holding(user_id=buyer_id, asset_id=asset_id, quantity=qty, avg_cost=price))
             
-        # Update Market Price
+        # Update Market Price — impact scales with trade size (1 unit = 5%, capped at 30%)
         asset = self.session.get(Asset, asset_id)
-        asset.current_price = (0.7 * asset.current_price) + (0.3 * price) # Weighted update
+        trade_impact = min(0.30, 0.05 * qty)
+        asset.current_price = ((1 - trade_impact) * asset.current_price) + (trade_impact * price)
         self.session.add(asset)
         
         self.session.add(buyer)
         self.session.add(seller)
         self.session.commit()
+
+    def place_order(self, user_id: int, asset_id: int, order_type: OrderType, quantity: int, price: float):
+        """Place a limit order and attempt immediate matching against resting orders."""
+        state = self.session.exec(select(MarketState)).first()
+        if state and state.phase == "FINISHED":
+            raise ValueError("Trading has ended")
+
+        user = self.session.get(User, user_id)
+        if not user:
+            raise ValueError("User not found")
+
+        if order_type == OrderType.BUY:
+            if user.cash < quantity * price:
+                raise ValueError(f"Insufficient cash. Need ${quantity * price:,.2f}, have ${user.cash:,.2f}")
+        else:
+            h = self.session.exec(
+                select(Holding).where(Holding.user_id == user_id, Holding.asset_id == asset_id)
+            ).first()
+            if not h or h.quantity < quantity:
+                raise ValueError("Insufficient assets to place sell order")
+
+        # Persist the order in the book
+        order = Order(user_id=user_id, asset_id=asset_id, type=order_type, price=price, quantity=quantity)
+        self.session.add(order)
+        self.session.commit()
+        self.session.refresh(order)
+        order_id = order.id
+
+        # Attempt matching against resting opposite orders
+        remaining = quantity
+        if order_type == OrderType.BUY:
+            candidates = self.session.exec(
+                select(Order).where(
+                    Order.asset_id == asset_id,
+                    Order.type == OrderType.SELL,
+                    Order.status == OrderStatus.OPEN,
+                    Order.price <= price,
+                    Order.user_id != user_id,
+                ).order_by(Order.price)
+            ).all()
+        else:
+            candidates = self.session.exec(
+                select(Order).where(
+                    Order.asset_id == asset_id,
+                    Order.type == OrderType.BUY,
+                    Order.status == OrderStatus.OPEN,
+                    Order.price >= price,
+                    Order.user_id != user_id,
+                ).order_by(Order.price.desc())
+            ).all()
+
+        # Capture IDs before execute_trade commits (which expires in-session objects)
+        candidate_ids = [(c.id, c.quantity) for c in candidates]
+
+        for cid, cqty in candidate_ids:
+            if remaining <= 0:
+                break
+            fill_qty = min(remaining, cqty)
+            candidate = self.session.get(Order, cid)
+            if not candidate or candidate.status != OrderStatus.OPEN:
+                continue
+            fill_price = candidate.price
+            buyer_id = user_id if order_type == OrderType.BUY else candidate.user_id
+            seller_id = candidate.user_id if order_type == OrderType.BUY else user_id
+            try:
+                self.execute_trade(buyer_id, seller_id, asset_id, fill_qty, fill_price)
+            except ValueError:
+                continue
+            remaining -= fill_qty
+            candidate = self.session.get(Order, cid)
+            if candidate:
+                candidate.quantity = max(0, candidate.quantity - fill_qty)
+                if candidate.quantity == 0:
+                    candidate.status = OrderStatus.FILLED
+                self.session.add(candidate)
+                self.session.commit()
+
+        # Update the placed order to reflect how much was filled
+        placed = self.session.get(Order, order_id)
+        if placed:
+            placed.quantity = remaining
+            if remaining <= 0:
+                placed.status = OrderStatus.FILLED
+            self.session.add(placed)
+            self.session.commit()

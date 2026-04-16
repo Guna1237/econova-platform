@@ -50,9 +50,14 @@ export default function Login() {
         }
         setLoading(true);
         try {
-            await login(username, password);
+            const data = await login(username, password);
             toast.success("Identity Verified", { duration: 1500 });
-            setTimeout(() => navigate('/dashboard'), 800);
+            // Route based on role
+            let dest = '/dashboard';
+            if (data.role === 'banker') dest = '/banker';
+            else if (data.role === 'sub_admin') dest = '/subadmin';
+            
+            setTimeout(() => navigate(dest), 800);
         } catch (err) {
             toast.error('Access Denied', { description: 'Invalid terminal credentials.' });
         } finally {

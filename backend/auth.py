@@ -93,3 +93,29 @@ async def get_active_user(current_user: User = Depends(get_current_user)):
             detail="Your account is frozen. Contact the administrator."
         )
     return current_user
+
+async def get_current_banker(current_user: User = Depends(get_current_user)):
+    """Dependency that ensures only banker role can access."""
+    if current_user.role != "banker":
+        raise HTTPException(status_code=403, detail="Banker access required")
+    return current_user
+
+async def get_current_sub_admin(current_user: User = Depends(get_current_user)):
+    """Dependency for sub-admin role."""
+    if current_user.role != "sub_admin":
+        raise HTTPException(status_code=403, detail="Sub-admin access required")
+    return current_user
+
+async def get_banker_or_admin(current_user: User = Depends(get_current_user)):
+    """Dependency that allows banker or admin access."""
+    if current_user.role not in ("banker", "admin", "sub_admin"):
+        raise HTTPException(status_code=403, detail="Banker, admin or sub-admin access required")
+    return current_user
+
+async def get_approver(current_user: User = Depends(get_current_user)):
+    """Dependency that allows admin or sub-admin access to approval endpoints."""
+    if current_user.role not in ("admin", "sub_admin", "banker"):
+        # allowing banker as well since banker currently has the UI for approvals
+        raise HTTPException(status_code=403, detail="Unauthorized: Approver access required")
+    return current_user
+

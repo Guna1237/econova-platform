@@ -147,6 +147,39 @@ export const repayLoan = async (loanId, amount) => {
     return response.data;
 };
 
+// --- MORTGAGE / EMERGENCY LIQUIDATION ---
+
+export const requestMortgage = async (collateral_asset_ticker, collateral_quantity, interest_rate, maturity_quarters) => {
+    const response = await default_api.post('/mortgage/request', { collateral_asset_ticker, collateral_quantity, interest_rate, maturity_quarters });
+    return response.data;
+};
+
+export const getMyMortgages = async () => {
+    const response = await default_api.get('/mortgage/my');
+    return response.data;
+};
+
+export const repayMortgage = async (mortgageId, amount) => {
+    const response = await default_api.post('/mortgage/repay', { mortgage_id: mortgageId, amount });
+    return response.data;
+};
+
+// Admin mortgage
+export const getAdminMortgageRequests = async () => {
+    const response = await default_api.get('/admin/mortgage-requests');
+    return response.data;
+};
+
+export const approveMortgage = async (mortgageId, adminNote) => {
+    const response = await default_api.post(`/admin/mortgage/${mortgageId}/approve`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const rejectMortgage = async (mortgageId, adminNote) => {
+    const response = await default_api.post(`/admin/mortgage/${mortgageId}/reject`, { admin_note: adminNote });
+    return response.data;
+};
+
 // --- ADMIN ---
 
 export const nextTurn = async () => {
@@ -436,13 +469,230 @@ export const getMyAuctionLots = async () => {
     return response.data;
 };
 
+// ============ BANKER REQUESTS (New Approval Flow) ============
+
+export const getBankerOwnRequests = async () => {
+    const response = await default_api.get('/banker/requests');
+    return response.data;
+};
+
+export const bankerRequestAssets = async (assetTicker, quantity, reason = '') => {
+    const response = await default_api.post('/banker/request/assets', { asset_ticker: assetTicker, quantity, reason });
+    return response.data;
+};
+
+export const bankerRequestShort = async (teamId, assetTicker, quantity) => {
+    const response = await default_api.post('/banker/request/short', { team_id: teamId, asset_ticker: assetTicker, quantity });
+    return response.data;
+};
+
+export const bankerRequestBailout = async (teamId, amount, terms = '', interestRate = 2.0, unfreezeTeam = true) => {
+    const response = await default_api.post('/banker/request/bailout', {
+        team_id: teamId, amount, terms, interest_rate: interestRate, unfreeze_team: unfreezeTeam
+    });
+    return response.data;
+};
+
+// ============ ADMIN APPROVALS & LIMITS ============
+
+export const getAllBankerRequests = async () => {
+    const response = await default_api.get('/admin/banker-requests');
+    return response.data;
+};
+
+export const approveBankerRequest = async (requestId, adminNote = '') => {
+    const response = await default_api.post(`/admin/banker-requests/${requestId}/approve`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const rejectBankerRequest = async (requestId, adminNote = '') => {
+    const response = await default_api.post(`/admin/banker-requests/${requestId}/reject`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const getShortLimits = async () => {
+    const response = await default_api.get('/admin/short-limits');
+    return response.data;
+};
+
+export const updateShortLimits = async (limits) => {
+    const response = await default_api.post('/admin/short-limits', limits);
+    return response.data;
+};
+
+// ============ BANKER DASHBOARD ============
+
+export const getBankerDashboard = async () => {
+    const response = await default_api.get('/banker/dashboard');
+    return response.data;
+};
+
+export const getBankerTeams = async () => {
+    const response = await default_api.get('/banker/teams');
+    return response.data;
+};
+
+export const getBankerTeamOverview = async (teamId) => {
+    const response = await default_api.get(`/banker/team/${teamId}/overview`);
+    return response.data;
+};
+
+export const getBankerTransactions = async () => {
+    const response = await default_api.get('/banker/transactions');
+    return response.data;
+};
+
+export const getBailoutHistory = async () => {
+    const response = await default_api.get('/banker/bailout-history');
+    return response.data;
+};
+
+// ============ ADMIN BANKER MANAGEMENT ============
+
+export const createBankerAccount = async (username, password, initialCapital = 10000000) => {
+    const response = await default_api.post('/admin/bankers/create', {
+        username, password, initial_capital: initialCapital
+    });
+    return response.data;
+};
+
+export const getAllBankers = async () => {
+    const response = await default_api.get('/admin/bankers');
+    return response.data;
+};
+
+export const addBankerCapital = async (bankerId, amount, reason = '') => {
+    const response = await default_api.post(`/admin/bankers/${bankerId}/add-capital`, { amount, reason });
+    return response.data;
+};
+
+// --- ADMIN: RESET GAME ---
+export const resetGame = async () => {
+    const response = await default_api.post('/admin/reset-game');
+    return response.data;
+};
+
+// --- ADMIN: SETTLE ALL DEBTS (End-of-game liquidation) ---
+export const settleAllDebts = async () => {
+    const response = await default_api.post('/admin/settle-all-debts');
+    return response.data;
+};
+
+// --- ADMIN: SEED HISTORY ---
+export const seedHistory = async () => {
+    const response = await default_api.post('/admin/seed-history');
+    return response.data;
+};
+
+// --- ADMIN: MANUAL RECOVERY / SHOCK RESET ---
+export const triggerRecovery = async () => {
+    const response = await default_api.post('/admin/trigger-recovery');
+    return response.data;
+};
+
+export const resetShock = async () => {
+    const response = await default_api.post('/admin/reset-shock');
+    return response.data;
+};
+
+// --- ADMIN: INVESTOR SENTIMENT ---
+export const setSentiment = async (sentiment) => {
+    const response = await default_api.post('/admin/sentiment', { sentiment });
+    return response.data;
+};
+
+// --- ADMIN: MARKET MAKER BOTS ---
+export const toggleBots = async () => {
+    const response = await default_api.post('/admin/bots/toggle');
+    return response.data;
+};
+
+// --- SECONDARY AUCTION HALL ---
+export const submitSecondaryAuctionRequest = async (assetTicker, quantity, reservePrice) => {
+    const response = await default_api.post('/secondary-auction/request', {
+        asset_ticker: assetTicker,
+        quantity,
+        reserve_price: reservePrice,
+    });
+    return response.data;
+};
+
+export const getMySecondaryRequests = async () => {
+    const response = await default_api.get('/secondary-auction/my-requests');
+    return response.data;
+};
+
+export const getAdminSecondaryRequests = async () => {
+    const response = await default_api.get('/admin/secondary-auction/requests');
+    return response.data;
+};
+
+export const approveSecondaryRequest = async (reqId) => {
+    const response = await default_api.post(`/admin/secondary-auction/${reqId}/approve`);
+    return response.data;
+};
+
+export const rejectSecondaryRequest = async (reqId, adminNote = '') => {
+    const response = await default_api.post(`/admin/secondary-auction/${reqId}/reject`, { admin_note: adminNote });
+    return response.data;
+};
+
+export const getSecondaryLots = async () => {
+    const response = await default_api.get('/auction/secondary-lots');
+    return response.data;
+};
+
+export const resolveSecondaryLot = async (lotId) => {
+    const response = await default_api.post(`/admin/secondary-lots/${lotId}/resolve`);
+    return response.data;
+};
+
+export const getFlaggedTrades = async () => {
+    const response = await default_api.get('/admin/flagged-trades');
+    return response.data;
+};
+
+// --- PUBLIC LEADERBOARD ---
+export const getPublicLeaderboard = async () => {
+    const response = await default_api.get('/leaderboard');
+    return response.data;
+};
+
+export const toggleLeaderboard = async () => {
+    const response = await default_api.post('/admin/leaderboard/toggle');
+    return response.data;
+};
+
+// --- AUCTION CONFIG ---
+export const getAuctionConfig = async () => {
+    const response = await default_api.get('/admin/auction/config');
+    return response.data;
+};
+
+export const setAuctionConfig = async (ticker, numLots, unitsPerLot, lastLotPremium = 1.0) => {
+    const response = await default_api.post('/admin/auction/config', {
+        ticker,
+        num_lots: numLots,
+        units_per_lot: unitsPerLot,
+        last_lot_premium: lastLotPremium,
+    });
+    return response.data;
+};
+
+// --- TEAM STARTING CAPITAL ---
+export const setTeamStartingCapital = async (amount) => {
+    const response = await default_api.post('/admin/team-capital', { amount });
+    return response.data;
+};
+
 export default default_api;
 
 
 
 // --- Real-time Connection (SSE primary, WS fallback) ---
 export const connectRealtime = (onMessage, onStatusChange) => {
-    const sseUrl = `${API_BASE_URL}/events`;
+    const token = localStorage.getItem('token');
+    const sseUrl = `${API_BASE_URL}/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
     let eventSource = null;
     let ws = null;
     let reconnectTimer = null;

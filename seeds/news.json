@@ -1,0 +1,232 @@
+[
+  {
+    "title": "NVDA Paces Broad Tech Gains as Data Center Build-out Extends",
+    "content": "Data centre infrastructure spending held up through the quarter, with NVDA order backlog running at 18 weeks. Memory chip prices flat. Downstream AI hardware demand still firm.",
+    "category": "market",
+    "sim_year": 1,
+    "sim_quarter": 2,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800",
+    "source": "Bloomberg Terminal"
+  },
+  {
+    "title": "OPEC Cuts Unlikely After Fourth Straight Inventory Draw",
+    "content": "Crude stockpiles fell for the fourth week running. OPEC secretariat meetings concluded without a change to production targets. Physical market players cite tightening supply from the US Gulf.",
+    "category": "company",
+    "sim_year": 1,
+    "sim_quarter": 1,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?w=800",
+    "source": "Reuters"
+  },
+  {
+    "title": "30 Teams, Five Assets, Three Hours",
+    "content": "The economics club's annual trading competition started today. Participants get live asset prices, a credit market, and an auction hall. Organizers declined to comment on what happens after lunch.",
+    "category": "fun",
+    "sim_year": 1,
+    "sim_quarter": 1,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "Campus Chronicle"
+  },
+  {
+    "title": "Premium F&B Chain Signs 12th Outlet Lease in Mumbai Metro Zone",
+    "content": "A food and beverage operator signed a lease for its twelfth location in Greater Mumbai. The expansion is partly debt-financed. The chain has not disclosed same-store sales data.",
+    "category": "decoy",
+    "sim_year": 1,
+    "sim_quarter": 2,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "Mumbai Mirror"
+  },
+  {
+    "title": "Fed Holds, Dot Plot Shifts Lower",
+    "content": "The Federal Reserve left the policy rate unchanged at its September meeting. Two members moved their end-of-year forecast lower. 10-year yields fell 8 basis points on the session.",
+    "category": "market",
+    "sim_year": 1,
+    "sim_quarter": 3,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "Financial Times"
+  },
+  {
+    "title": "SPDR Gold ETF Posts Largest Weekly Inflow Since April",
+    "content": "Gold ETF holdings rose by 12 tonnes last week. Physical demand from central banks remained steady. Spot price up 1.4% on the week.",
+    "category": "company",
+    "sim_year": 1,
+    "sim_quarter": 3,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1610375461246-83df859d849d?w=800",
+    "source": "World Gold Council"
+  },
+  {
+    "title": "Streaming Platform Wins Cricket Rights Package for Rs 21,500 Crore",
+    "content": "A domestic streaming platform won the five-year broadcast rights for the premier cricket league at Rs 21,500 crore, a 34% premium to the prior cycle. Advertising rates for the upcoming season are expected to follow.",
+    "category": "decoy",
+    "sim_year": 1,
+    "sim_quarter": 4,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "SportsBiz India"
+  },
+  {
+    "title": "Office Vacancies Dip to 18-Month Low Across Four Tier-1 Cities",
+    "content": "Office space absorption was positive for the second straight quarter, with net take-up of 8.4 million sq ft across Mumbai, Delhi, Bengaluru, and Hyderabad. Grade-A supply pipeline remains constrained.",
+    "category": "market",
+    "sim_year": 1,
+    "sim_quarter": 4,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=800",
+    "source": "CBRE Research"
+  },
+  {
+    "title": "Cloud Providers Double Capex Guidance Again",
+    "content": "Microsoft, Alphabet, and Amazon raised their 2024 capital spending forecasts for the second consecutive quarter, citing AI inference demand. NVDA and custom silicon suppliers were named as primary beneficiaries.",
+    "category": "market",
+    "sim_year": 2,
+    "sim_quarter": 1,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800",
+    "source": "Bloomberg Terminal"
+  },
+  {
+    "title": "Tanker Insurance Premiums Rise 18% on Strait of Hormuz Concerns",
+    "content": "Marine war risk insurance rates for Persian Gulf transits rose 18 basis points last month. Physical crude traders are paying higher freight premiums on spot cargoes. BRENT prompt spread widened.",
+    "category": "company",
+    "sim_year": 2,
+    "sim_quarter": 1,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?w=800",
+    "source": "Reuters"
+  },
+  {
+    "title": "Sell-Side Note Calling for Everything Rally Gets One Reply on X",
+    "content": "A cross-asset note from a major bank argued for synchronized gains across all risk categories. The report was cited approvingly by two accounts on X and one Substack. Markets did not respond.",
+    "category": "fun",
+    "sim_year": 2,
+    "sim_quarter": 2,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "FinancialMemes.io"
+  },
+  {
+    "title": "Specialty Coffee Operator Opens 18 New Outlets in Tier-2 Cities",
+    "content": "A specialty coffee chain opened 18 new outlets in Pune, Jaipur, Lucknow, and Kochi last quarter. Monthly revenue per store is reportedly running ahead of forecast. Management gave no guidance on margins.",
+    "category": "decoy",
+    "sim_year": 2,
+    "sim_quarter": 2,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "Business Standard"
+  },
+  {
+    "title": "13-Week T-Bill Auction Clears at 3.1x Bid-to-Cover",
+    "content": "Demand at the Treasury's 13-week bill auction hit a three-quarter high, with foreign central banks and domestic money market funds among the largest buyers. Yield closed two basis points inside the prior week.",
+    "category": "market",
+    "sim_year": 2,
+    "sim_quarter": 3,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "US Treasury"
+  },
+  {
+    "title": "Bridgeline Capital Discloses 8% Stake in Diversified REIT Basket",
+    "content": "A 13F filing shows Bridgeline Capital accumulated shares in five REIT names over three quarters, averaging in at prices not disclosed. The fund has not commented publicly.",
+    "category": "bait",
+    "sim_year": 2,
+    "sim_quarter": 3,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1560518883-ce09059eeffa?w=800",
+    "source": "SEC Filing"
+  },
+  {
+    "title": "TSMC Advanced Packaging Lead Times Extend to 22 Weeks",
+    "content": "Advanced packaging capacity for CoWoS substrates is booked through Q3, per supply chain data. Some NVDA customers are reportedly moving orders to alternative packaging partners.",
+    "category": "company",
+    "sim_year": 2,
+    "sim_quarter": 4,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800",
+    "source": "DigiTimes"
+  },
+  {
+    "title": "Asia-Pacific Port Congestion Returns as Freight Rates Rise 24%",
+    "content": "Average container freight rates on Asia-Europe routes rose 24% over four weeks. Port dwell times at Singapore and Shanghai increased by two days. Importers are adding buffer stock, pushing wholesale prices higher.",
+    "category": "market",
+    "sim_year": 2,
+    "sim_quarter": 4,
+    "is_published": true,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "Bloomberg Supply Chain"
+  },
+  {
+    "title": "Manufacturing PMI Contracts for Second Consecutive Month",
+    "content": "The headline PMI reading came in at 47.8. New orders sub-index fell sharply. Several economists have lowered their growth forecasts for the next two quarters.",
+    "category": "macro",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "IHS Markit"
+  },
+  {
+    "title": "2Y-10Y Yield Spread Inverts 42 Basis Points",
+    "content": "The Treasury yield curve inverted further this week. The 2-10 spread reached -42 basis points, the deepest level since 2006. Fixed income desks are reviewing duration exposure.",
+    "category": "macro",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "Federal Reserve"
+  },
+  {
+    "title": "OPEC+ Calls Unscheduled Meeting. No Agenda Published.",
+    "content": "An unscheduled OPEC+ ministerial session has been convened for later this week. Delegates declined to comment ahead of the announcement. Crude prompt spreads widened on the news.",
+    "category": "market",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1473341304170-971dccb5ac1e?w=800",
+    "source": "OPEC Secretariat"
+  },
+  {
+    "title": "Intern at Major Bank Accidentally Short-Sells $2B in Gold. Gets Promoted.",
+    "content": "In an unusual sequence of events, a first-year analyst's fat-finger trade turned profitable when prices fell. Management cited conviction and instinct in the promotion announcement.",
+    "category": "fun",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1579532537598-459ecdaf39cc?w=800",
+    "source": "Financial Onion"
+  },
+  {
+    "title": "Central Bank Calls Emergency Board Meeting. Rate Decision Expected Friday.",
+    "content": "Overnight swap markets are pricing a 75bps move with high conviction. The bank last called an emergency session in 2020. Fixed income markets are volatile.",
+    "category": "market",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "Bloomberg"
+  },
+  {
+    "title": "NVDA Announces $50B Multi-Year Chip Supply Agreement",
+    "content": "A consortium of hyperscalers signed a multi-year agreement locking in forward GPU capacity. Analysts revised price targets higher. TSMC fab allocation for the arrangement runs through 2027.",
+    "category": "company",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=800",
+    "source": "NVIDIA IR"
+  },
+  {
+    "title": "Institutional Buyers Return After Three-Week Selloff",
+    "content": "Bid-ask spreads on beaten-down names narrowed this week as large-cap long-only funds re-entered. Volatility index fell 8 points. Several assets are trading at multi-year discounts to book value.",
+    "category": "market",
+    "sim_year": null,
+    "sim_quarter": null,
+    "is_published": false,
+    "image_url": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=800",
+    "source": "Bloomberg"
+  }
+]

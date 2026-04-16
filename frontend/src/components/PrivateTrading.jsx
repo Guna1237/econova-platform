@@ -51,7 +51,7 @@ export default function PrivateTrading({ user, marketState, assets }) {
         e.preventDefault();
         setLoading(true);
         try {
-            // Use undefined for empty string to match optional backend field
+            const isAuction = !formData.to_username && formData.offer_type === 'SELL' && formData.listing_type === 'AUCTION';
             const payload = {
                 ...formData,
                 to_username: formData.to_username || null,
@@ -60,10 +60,14 @@ export default function PrivateTrading({ user, marketState, assets }) {
                 listing_type: (!formData.to_username && formData.offer_type === 'SELL') ? formData.listing_type : 'FIXED'
             };
 
-            await createPrivateOffer(payload);
-            toast.success('Offer created successfully');
+            const result = await createPrivateOffer(payload);
+            if (isAuction) {
+                toast.success(result.message || 'Lot submitted — admin will open it for bidding when ready.');
+            } else {
+                toast.success('Offer created successfully');
+            }
             setFormData({ ...formData, quantity: '', price_per_unit: '', to_username: '' });
-            fetchData();
+            await fetchData();
             setActiveTab('my_offers');
         } catch (error) {
             toast.error(error.response?.data?.detail || 'Failed to create offer');

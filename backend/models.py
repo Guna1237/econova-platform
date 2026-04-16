@@ -5,8 +5,11 @@ from datetime import datetime, timezone
 
 class Role(str, Enum):
     ADMIN = "admin"
+    SUB_ADMIN = "sub_admin"
     TEAM = "team"
+    BANKER = "banker"
     AI_AGENT = "ai_agent"
+
 
 class OrderType(str, Enum):
     BUY = "buy"
@@ -132,6 +135,23 @@ class MarketState(SQLModel, table=True):
     active_auction_asset: Optional[str] = None
     news_feed: str = Field(default="Welcome to Econova.")
 
+    # Investor sentiment dial (admin-controlled)
+    sentiment: str = Field(default="NEUTRAL")  # BULLISH, NEUTRAL, BEARISH
+
+    # Market maker bots toggle
+    bots_enabled: bool = Field(default=False)
+
+    # Public leaderboard visibility toggle (admin-controlled)
+    leaderboard_visible: bool = Field(default=False)
+
+    # Per-asset auction lot configuration (JSON: {ticker: {num_lots, units_per_lot, last_lot_premium}})
+    auction_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+
+    # Team starting capital (used when creating new team accounts)
+    team_starting_capital: float = Field(default=1_000_000.0)
+
+
+
 class PriceHistory(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     asset_id: int = Field(foreign_key="asset.id")
@@ -218,6 +238,9 @@ class Transaction(SQLModel, table=True):
     price_per_unit: float
     total_value: float
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
+    is_flagged: bool = Field(default=False)
+    flag_reason: Optional[str] = None
+
 class NewsItem(SQLModel, table=True):
     """News articles for the platform"""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -227,6 +250,9 @@ class NewsItem(SQLModel, table=True):
     is_published: bool = Field(default=False)
     image_url: Optional[str] = None
     source: str = Field(default="Global News Network")
+    sim_year: Optional[int] = None    # which sim year this news belongs to
+    sim_quarter: Optional[int] = None # which sim quarter (1-4)
+    category: str = Field(default="market")  # market, company, macro, decoy, fun, bait
 
 class TradeApprovalStatus(str, Enum):
     PENDING = "pending"
@@ -270,3 +296,116 @@ class LoanApproval(SQLModel, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: Optional[datetime] = None
     resolved_by: Optional[str] = None  # admin username
+
+
+# ============ BANKING MODELS ============
+class BailoutRecord(SQLModel, table=True):
+    """Tracks banker bailouts of bankrupt teams — creates a loan"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    banker_id: int = Field(foreign_key="user.id", index=True)
+    team_id: int = Field(foreign_key="user.id", index=True)
+    amount: float
+    terms: Optional[str] = None
+    bailout_type: str = Field(default="loan")  # loan, debt_forgiveness
+    interest_rate: float = Field(default=2.0)   # 2% quarterly
+    loan_id: Optional[int] = None               # Links to TeamLoan created
+    unfreeze_team: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class BankerRequestType(str, Enum):
+    ASSET_REQUEST = "asset_request"      # Banker wants shares from admin
+    BAILOUT = "bailout"                  # Banker requests bailout for a team
+
+
+class BankerRequestStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class BankerRequest(SQLModel, table=True):
+    """Unified approval queue for all banker-initiated requests"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    banker_id: int = Field(foreign_key="user.id", index=True)
+    request_type: BankerRequestType
+    status: BankerRequestStatus = Field(default=BankerRequestStatus.PENDING)
+
+    # For ASSET_REQUEST
+    asset_ticker: Optional[str] = None
+    quantity: Optional[int] = None
+    request_reason: Optional[str] = None          # Why the banker needs these shares
+
+
+    # For BAILOUT
+    bailout_team_id: Optional[int] = None
+    bailout_amount: Optional[float] = None
+    bailout_terms: Optional[str] = None
+    bailout_interest_rate: float = Field(default=2.0)  # 2% quarterly
+    unfreeze_team: bool = Field(default=True)
+
+    # Admin response
+    admin_note: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolved_by: Optional[str] = None              # admin username
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ============ EMERGENCY LIQUIDATION / MORTGAGE ============
+
+class MortgageStatus(str, Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    REPAID = "repaid"
+    DEFAULTED = "defaulted"
+    REJECTED = "rejected"
+
+
+class MortgageLoan(SQLModel, table=True):
+    """Emergency liquidation: team pledges assets as collateral for a bank loan.
+    If not repaid by maturity, collateral is forfeited to the bank."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    borrower_id: int = Field(foreign_key="user.id", index=True)
+
+    # Collateral details
+    collateral_asset_id: int = Field(foreign_key="asset.id")
+    collateral_quantity: int
+    collateral_value_at_lock: float  # Market value snapshot at approval time
+
+    # Loan details
+    loan_amount: float               # Cash given to borrower (80% LTV of collateral)
+    interest_rate: float             # % per quarter (minimum 5%)
+    maturity_quarters: int           # Agreed maturity in quarters
+    quarters_remaining: int          # Countdown — decremented each quarter
+
+    # Repayment tracking
+    total_due: float = Field(default=0.0)          # principal + accrued interest
+    total_repaid: float = Field(default=0.0)
+    remaining_balance: float = Field(default=0.0)  # total_due - total_repaid
+
+    # Status
+    status: MortgageStatus = Field(default=MortgageStatus.PENDING)
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    approved_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+
+    # Admin
+    admin_note: Optional[str] = None
+
+
+# ============ SECONDARY AUCTION ============
+
+class SecondaryAuctionRequest(SQLModel, table=True):
+    """Team requests to list their assets in the secondary auction hall."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    seller_id: int = Field(foreign_key="user.id", index=True)
+    asset_ticker: str = Field(index=True)
+    quantity: int
+    reserve_price: float          # minimum acceptable bid per unit
+    status: str = Field(default="pending")  # pending, approved, rejected
+    admin_note: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+

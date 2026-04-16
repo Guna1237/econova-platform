@@ -52,15 +52,41 @@ def _run_migrations():
         ("auctionlot", "seller_cost_basis", "FLOAT DEFAULT NULL"),
         # TeamLoan: grace period tracking
         ("teamloan", "missed_quarters", "INTEGER NOT NULL DEFAULT 0"),
+        # MarketState: short selling limits per asset
+        ("marketstate", "short_limit_gold", "INTEGER NOT NULL DEFAULT 0"),
+        ("marketstate", "short_limit_nvda", "INTEGER NOT NULL DEFAULT 0"),
+        ("marketstate", "short_limit_brent", "INTEGER NOT NULL DEFAULT 0"),
+        ("marketstate", "short_limit_reits", "INTEGER NOT NULL DEFAULT 0"),
+        # BailoutRecord: loan linkage and interest rate
+        ("bailoutrecord", "interest_rate", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("bailoutrecord", "loan_id", "INTEGER DEFAULT NULL"),
+        # MarketState: investor sentiment dial
+        ("marketstate", "sentiment", "TEXT DEFAULT 'NEUTRAL'"),
+        # MarketState: market maker bots toggle
+        ("marketstate", "bots_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        # NewsItem: simulation metadata
+        ("newsitem", "sim_year", "INTEGER DEFAULT NULL"),
+        ("newsitem", "sim_quarter", "INTEGER DEFAULT NULL"),
+        ("newsitem", "category", "TEXT DEFAULT 'market'"),
+        # Transaction: collusion flag
+        ("transaction", "is_flagged", "INTEGER NOT NULL DEFAULT 0"),
+        ("transaction", "flag_reason", "TEXT DEFAULT NULL"),
+        # MarketState: public leaderboard toggle
+        ("marketstate", "leaderboard_visible", "INTEGER NOT NULL DEFAULT 0"),
+        # MarketState: per-asset auction lot config (stored as JSON/TEXT)
+        ("marketstate", "auction_config", "TEXT DEFAULT NULL"),
+        # MarketState: configurable team starting capital
+        ("marketstate", "team_starting_capital", "REAL DEFAULT 1000000.0"),
     ]
     
     with engine.connect() as conn:
         for table, column, col_type in migrations:
             try:
-                conn.exec_driver_sql(f"SELECT {column} FROM {table} LIMIT 1")
+                # Quote identifiers to handle reserved words like "transaction"
+                conn.exec_driver_sql(f'SELECT "{column}" FROM "{table}" LIMIT 1')
             except Exception:
                 try:
-                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                    conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}')
                     logger.info(f"Migration: added {column} to {table}")
                     conn.commit()
                 except Exception as e:
@@ -69,9 +95,12 @@ def _run_migrations():
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
-    
+
     # Run schema migrations for existing DBs
     _run_migrations()
+
+    # Dispose connection pool so all subsequent connections see the updated schema
+    engine.dispose()
     
     # SQLite-specific optimizations (skip on Postgres)
     if is_sqlite:
