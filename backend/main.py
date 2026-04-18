@@ -409,8 +409,7 @@ def get_price_history(asset_id: int, quarterly: bool = False, user: User = Depen
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
     query = select(PriceHistory).where(PriceHistory.asset_id == asset_id)
-    if not quarterly:
-        query = query.where((PriceHistory.quarter == 0) | (PriceHistory.quarter == 4))
+    # Always return all data points — the frontend controls label density per view mode
     query = query.order_by(PriceHistory.year, PriceHistory.quarter)
     return session.exec(query).all()
 
@@ -2253,6 +2252,77 @@ async def admin_penalty(
     return {"message": f"Penalty of ${deducted:,.2f} applied to {team.username}", "new_balance": team.cash}
 
 
+class DividendBody(BaseModel):
+    ticker: str
+    amount_per_unit: float
+    note: Optional[str] = None
+
+    @field_validator('amount_per_unit')
+    @classmethod
+    def amount_positive(cls, v):
+        if v <= 0: raise ValueError('Dividend must be positive')
+        return v
+
+
+@app.post("/admin/dividends")
+async def issue_dividend(
+    body: DividendBody,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Issue a cash dividend to all holders of an asset, proportional to their holdings."""
+    ticker = body.ticker.upper()
+    asset = session.exec(select(Asset).where(Asset.ticker == ticker)).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    state = session.exec(select(MarketState)).first()
+
+    # Find all holdings of this asset
+    holdings = session.exec(select(Holding).where(Holding.asset_id == asset.id)).all()
+    if not holdings:
+        raise HTTPException(status_code=400, detail=f"No teams currently hold {ticker}")
+
+    total_paid = 0.0
+    recipients = 0
+    for holding in holdings:
+        payout = round(body.amount_per_unit * holding.quantity, 2)
+        holder = session.get(User, holding.user_id)
+        if holder and holder.role not in (Role.ADMIN,):
+            holder.cash += payout
+            session.add(holder)
+            total_paid += payout
+            recipients += 1
+
+    # Create a news item so it appears in the news feed
+    note_text = f" — {body.note}" if body.note else ""
+    news = NewsItem(
+        title=f"{ticker} Dividend Issued: ${body.amount_per_unit:,.2f}/unit",
+        content=(
+            f"The market authority has issued a dividend of ${body.amount_per_unit:,.2f} per unit "
+            f"on {asset.name} ({ticker}). All {recipients} holding team(s) received a proportional payout "
+            f"totalling ${total_paid:,.2f}.{note_text}"
+        ),
+        is_published=True,
+        published_at=datetime.now(timezone.utc),
+        sim_year=state.current_year if state else None,
+        sim_quarter=state.current_quarter if state else None,
+        category="market",
+    )
+    session.add(news)
+    session.commit()
+
+    await ws_manager.broadcast("news_update", {"title": news.title, "action": "dividend_issued"})
+    await ws_manager.broadcast("market_update", {
+        "action": "dividend_issued",
+        "ticker": ticker,
+        "amount_per_unit": body.amount_per_unit,
+        "total_paid": total_paid,
+        "recipients": recipients,
+    })
+    return {"message": f"Dividend issued: ${body.amount_per_unit:,.2f}/unit × {recipients} teams = ${total_paid:,.2f} distributed.", "total_paid": total_paid, "recipients": recipients}
+
+
 @app.post("/admin/market/toggle-trade-approval")
 async def toggle_trade_approval(
     user: User = Depends(get_current_admin),
@@ -3444,24 +3514,29 @@ async def seed_history(user: User = Depends(get_current_admin), session: Session
 
     assets = {a.ticker: a for a in session.exec(select(Asset)).all()}
 
+    # Seed 8 quarters (2 years) of backdrop history as Year -2 and Year -1
     for ticker, prices in seed_prices.items():
         asset = assets.get(ticker)
         if not asset:
             continue
         for i, price in enumerate(prices):
-            year = (i // 4) + 1
+            year = (i // 4) - 2   # quarters 0-3 → Y-2, quarters 4-7 → Y-1
             quarter = (i % 4) + 1
             session.add(PriceHistory(asset_id=asset.id, year=year, quarter=quarter, price=price))
         asset.current_price = prices[-1]
         session.add(asset)
 
+    # After seeding, simulation starts at Year 0 Q1 (the actual game begins)
     state = session.exec(select(MarketState)).first()
     if state:
-        state.current_year = 2
-        state.current_quarter = 4
+        state.current_year = 0
+        state.current_quarter = 1
         session.add(state)
 
+    # Remap seed news sim_year from 1→-2, 2→-1 to match negative year backdrop
+    year_remap = {1: -2, 2: -1}
     for n in seed_news:
+        raw_year = n.get("sim_year")
         session.add(NewsItem(
             title=n["title"],
             content=n["content"],
@@ -3469,16 +3544,16 @@ async def seed_history(user: User = Depends(get_current_admin), session: Session
             image_url=n.get("image_url"),
             source=n.get("source"),
             category=n.get("category", "market"),
-            sim_year=n.get("sim_year"),
+            sim_year=year_remap.get(raw_year, raw_year),
             sim_quarter=n.get("sim_quarter"),
             published_at=datetime.now(timezone.utc),
         ))
 
     session.commit()
 
-    await ws_manager.broadcast("market_update", {"action": "history_seeded", "year": 2, "quarter": 4})
+    await ws_manager.broadcast("market_update", {"action": "history_seeded", "year": 0, "quarter": 1})
     await ws_manager.broadcast("news_update", {"action": "bulk_published"})
-    return {"message": f"History seeded: 8 quarters of prices + {len(seed_news)} news items loaded. Market is now at Year 2, Q4."}
+    return {"message": f"History seeded: 8 quarters (Y-2, Y-1) of backdrop prices + {len(seed_news)} news items. Simulation is now at Year 0 Q1 — ready to play."}
 
 
 # --- ADMIN: MANUAL RECOVERY / SHOCK RESET ---

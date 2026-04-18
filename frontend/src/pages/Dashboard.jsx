@@ -7,7 +7,7 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital, issueDividend } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -241,7 +241,21 @@ export default function Dashboard() {
 
             if (msg.type === 'bid_placed' || msg.type === 'auction_update') notifyTab = 'auction';
             if (msg.type === 'trade_executed') notifyTab = 'marketplace';
-            if (msg.type === 'news_update') notifyTab = 'news';
+            if (msg.type === 'news_update') {
+                notifyTab = 'news';
+                const title = msg.data?.title || msg.data?.headline;
+                if (title) toast.info(`📰 ${title}`, { duration: 5000 });
+            }
+            if (msg.type === 'auction_update') {
+                const action = msg.data?.action || '';
+                const ticker = msg.data?.ticker || '';
+                if (action === 'opened') toast.info(`🔨 Auction opened: ${ticker}`, { duration: 4000 });
+                else if (action === 'auction_ended' || action === 'closed') toast.info('🔨 Auction closed', { duration: 4000 });
+                else if (action === 'lot_resolved') {
+                    const msg2 = msg.data?.message || `Lot resolved`;
+                    toast.success(`✅ ${msg2}`, { duration: 5000 });
+                }
+            }
             if (msg.type === 'market_update') {
                 const action = msg.data?.action || '';
                 if (action.includes('loan') || action.includes('mortgage')) notifyTab = 'credit';
@@ -252,9 +266,24 @@ export default function Dashboard() {
                 if (action.includes('mortgage') && action !== 'mortgage_repaid') {
                     if (user?.role === 'admin') { notifyTab = 'admin_panel'; playNotificationSound('standard'); }
                 }
-                if (action.includes('year') || action.includes('quarter')) {
+                if (action === 'quarter_advanced') {
                     soundType = 'time';
                     playNotificationSound('time');
+                    const yr = msg.data?.year ?? '';
+                    const q = msg.data?.quarter ?? '';
+                    toast.success(`📅 Quarter advanced → Y${yr} Q${q}`, { duration: 5000 });
+                } else if (action === 'year_advanced' || action.includes('year')) {
+                    soundType = 'time';
+                    playNotificationSound('time');
+                    toast.success('📅 Year advanced', { duration: 5000 });
+                } else if (action.includes('quarter')) {
+                    soundType = 'time';
+                    playNotificationSound('time');
+                }
+                if (action === 'dividend_issued') {
+                    const tkr = msg.data?.ticker || '';
+                    const amt = msg.data?.amount_per_unit;
+                    toast.success(`💰 Dividend: ${tkr} +$${amt}/unit`, { duration: 6000 });
                 }
                 if (action === 'offer_created') {
                     const currentUser = user?.username;
@@ -415,6 +444,9 @@ export default function Dashboard() {
     };
 
     // --- New handler functions ---
+    const [dividendForm, setDividendForm] = useState({ ticker: 'GOLD', amount: '', note: '' });
+    const [dividendLoading, setDividendLoading] = useState(false);
+
     const [resetConfirmText, setResetConfirmText] = useState('');
     const [showResetModal, setShowResetModal] = useState(false);
     const [auctionListModal, setAuctionListModal] = useState(null); // { ticker, maxQty }
@@ -485,6 +517,22 @@ export default function Dashboard() {
             toast.info(res.message);
             fetchData();
         } catch (e) { toast.error('Failed to toggle bots'); }
+    };
+
+    const handleIssueDividend = async () => {
+        const amt = parseFloat(dividendForm.amount);
+        if (!amt || amt <= 0) { toast.error('Enter a valid dividend amount'); return; }
+        setDividendLoading(true);
+        try {
+            const res = await issueDividend(dividendForm.ticker, amt, dividendForm.note);
+            toast.success(`Dividend issued: ${dividendForm.ticker} $${amt}/unit — $${res.total_paid?.toLocaleString()} paid to ${res.recipients} teams`);
+            setDividendForm(f => ({ ...f, amount: '', note: '' }));
+            fetchData();
+        } catch (e) {
+            toast.error(e.response?.data?.detail || 'Failed to issue dividend');
+        } finally {
+            setDividendLoading(false);
+        }
     };
 
     const handleSubmitAuctionListing = async () => {
@@ -1079,6 +1127,61 @@ export default function Dashboard() {
                                                     {marketState?.leaderboard_visible ? 'All players can see the live leaderboard.' : 'Only admin sees rankings.'}
                                                 </span>
                                             </div>
+                                        </div>
+
+                                        {/* Dividend Issuance */}
+                                        <div className="fintech-card" style={{ marginBottom: '2rem', background: '#FFF' }}>
+                                            <div className="text-label" style={{ marginBottom: '1rem' }}>ISSUE DIVIDEND</div>
+                                            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                                <div>
+                                                    <label style={{ fontSize: '0.68rem', fontWeight: 700, color: '#6B7280', display: 'block', marginBottom: '3px' }}>ASSET</label>
+                                                    <select
+                                                        value={dividendForm.ticker}
+                                                        onChange={e => setDividendForm(f => ({ ...f, ticker: e.target.value }))}
+                                                        style={{ padding: '0.45rem 0.75rem', border: '1px solid #D1D5DB', fontSize: '0.85rem', fontWeight: 700, background: '#FFF', cursor: 'pointer' }}
+                                                    >
+                                                        {['GOLD', 'NVDA', 'BRENT', 'REITS'].map(t => (
+                                                            <option key={t} value={t}>{t}</option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+                                                <div style={{ flex: 1, minWidth: '120px' }}>
+                                                    <label style={{ fontSize: '0.68rem', fontWeight: 700, color: '#6B7280', display: 'block', marginBottom: '3px' }}>AMOUNT PER UNIT ($)</label>
+                                                    <input
+                                                        type="number" min="0.01" step="0.01"
+                                                        value={dividendForm.amount}
+                                                        onChange={e => setDividendForm(f => ({ ...f, amount: e.target.value }))}
+                                                        placeholder="e.g. 5.00"
+                                                        style={{ width: '100%', padding: '0.45rem 0.6rem', border: '1px solid #D1D5DB', fontSize: '0.9rem', boxSizing: 'border-box' }}
+                                                    />
+                                                </div>
+                                                <div style={{ flex: 2, minWidth: '160px' }}>
+                                                    <label style={{ fontSize: '0.68rem', fontWeight: 700, color: '#6B7280', display: 'block', marginBottom: '3px' }}>NOTE (optional)</label>
+                                                    <input
+                                                        type="text"
+                                                        value={dividendForm.note}
+                                                        onChange={e => setDividendForm(f => ({ ...f, note: e.target.value }))}
+                                                        placeholder="Q2 earnings distribution..."
+                                                        style={{ width: '100%', padding: '0.45rem 0.6rem', border: '1px solid #D1D5DB', fontSize: '0.85rem', boxSizing: 'border-box' }}
+                                                    />
+                                                </div>
+                                                <button
+                                                    onClick={handleIssueDividend}
+                                                    disabled={dividendLoading || !dividendForm.amount}
+                                                    style={{
+                                                        padding: '0.5rem 1.25rem', fontWeight: 700, fontSize: '0.82rem',
+                                                        background: dividendLoading || !dividendForm.amount ? '#E5E7EB' : '#059669',
+                                                        color: dividendLoading || !dividendForm.amount ? '#9CA3AF' : '#FFF',
+                                                        border: 'none', cursor: dividendLoading || !dividendForm.amount ? 'not-allowed' : 'pointer',
+                                                        whiteSpace: 'nowrap', flexShrink: 0
+                                                    }}
+                                                >
+                                                    {dividendLoading ? 'ISSUING...' : '💰 ISSUE DIVIDEND'}
+                                                </button>
+                                            </div>
+                                            <p style={{ fontSize: '0.7rem', color: '#9CA3AF', marginTop: '0.5rem', marginBottom: 0 }}>
+                                                Pays amount × units held to every team holding {dividendForm.ticker}. Triggers a news announcement automatically.
+                                            </p>
                                         </div>
 
                                         {/* Auction Lot Configuration */}

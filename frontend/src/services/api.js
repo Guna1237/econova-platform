@@ -647,6 +647,11 @@ export const resolveSecondaryLot = async (lotId) => {
     return response.data;
 };
 
+export const issueDividend = async (ticker, amountPerUnit, note = '') => {
+    const response = await default_api.post('/admin/dividends', { ticker, amount_per_unit: amountPerUnit, note: note || undefined });
+    return response.data;
+};
+
 export const getFlaggedTrades = async () => {
     const response = await default_api.get('/admin/flagged-trades');
     return response.data;

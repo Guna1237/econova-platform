@@ -18,7 +18,10 @@ export default function PriceChart({ asset, lastUpdate }) {
             .then(history => {
                 const formatted = history.map(h => ({
                     ...h,
-                    label: h.quarter && h.quarter > 0 ? `Y${h.year} Q${h.quarter}` : `Y${h.year}`,
+                    // yearly mode: show only the year on ticks; quarterly: show Y+Q
+                    label: viewMode === 'quarterly'
+                        ? (h.quarter && h.quarter > 0 ? `Y${h.year} Q${h.quarter}` : `Y${h.year}`)
+                        : `Y${h.year}`,
                     price: parseFloat(h.price.toFixed(2))
                 }));
                 setData(formatted);
@@ -120,7 +123,15 @@ export default function PriceChart({ asset, lastUpdate }) {
                             tickLine={false}
                             tick={{ fill: '#000', fontSize: 10, fontFamily: 'Roboto Mono', fontWeight: 500 }}
                             padding={{ left: 10, right: 10 }}
-                            interval={viewMode === 'quarterly' && displayData.length > 12 ? Math.floor(displayData.length / 8) : 0}
+                            interval={viewMode === 'quarterly' && displayData.length > 12
+                                ? Math.floor(displayData.length / 8)
+                                : 0}
+                            tickFormatter={(value, index) => {
+                                if (viewMode !== 'yearly') return value;
+                                // Only show label on first occurrence of each year — suppress duplicates
+                                const firstIdx = displayData.findIndex(d => d.label === value);
+                                return index === firstIdx ? value : '';
+                            }}
                         />
                         <YAxis
                             axisLine={false}
