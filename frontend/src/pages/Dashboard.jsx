@@ -100,6 +100,21 @@ export default function Dashboard() {
                     osc.start(now + i * 0.12);
                     osc.stop(now + i * 0.12 + 0.8);
                 });
+            } else if (type === 'news') {
+                // Descending ding-dong doublet — F#5 → D5 (news flash feel)
+                [739.99, 587.33].forEach((freq, i) => {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(freq, now + i * 0.18);
+                    gain.gain.setValueAtTime(0, now + i * 0.18);
+                    gain.gain.linearRampToValueAtTime(0.25, now + i * 0.18 + 0.03);
+                    gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.18 + 0.55);
+                    osc.start(now + i * 0.18);
+                    osc.stop(now + i * 0.18 + 0.6);
+                });
             } else {
                 // Pleasant Chime (Harmonic Stack)
                 const fundamental = 880; // A5
@@ -244,7 +259,10 @@ export default function Dashboard() {
             if (msg.type === 'news_update') {
                 notifyTab = 'news';
                 const title = msg.data?.title || msg.data?.headline;
-                if (title) toast.info(`📰 ${title}`, { duration: 5000 });
+                if (title) {
+                    playNotificationSound('news');
+                    toast.info(`📰 ${title}`, { duration: 6000 });
+                }
             }
             if (msg.type === 'auction_update') {
                 const action = msg.data?.action || '';
@@ -1184,63 +1202,58 @@ export default function Dashboard() {
                                             </p>
                                         </div>
 
-                                        {/* Auction Lot Configuration */}
+                                        {/* Auction Lot Configuration — per-lot individual units */}
                                         <div className="fintech-card" style={{ marginBottom: '2rem', background: '#FFF' }}>
                                             <div className="text-label" style={{ marginBottom: '1rem' }}>AUCTION LOT CONFIGURATION</div>
-                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem' }}>
                                                 {['GOLD', 'NVDA', 'BRENT', 'REITS'].map(ticker => {
-                                                    const defaults = { GOLD: [4,10], NVDA: [4,50], BRENT: [4,100], REITS: [4,5] };
+                                                    const defaultLots = { GOLD: [5,10,15,20], NVDA: [25,50,75,100], BRENT: [50,100,150,200], REITS: [3,5,8,10] };
                                                     const cfg = auctionConfig[ticker] || {};
-                                                    const numLots = cfg.num_lots ?? defaults[ticker][0];
-                                                    const units = cfg.units_per_lot ?? defaults[ticker][1];
-                                                    const premium = cfg.last_lot_premium ?? 1.0;
+                                                    const lots = cfg.lots || defaultLots[ticker];
                                                     return (
                                                         <div key={ticker} style={{ border: '1px solid #E5E7EB', borderRadius: '8px', padding: '0.75rem' }}>
-                                                            <div style={{ fontWeight: 700, fontSize: '0.8rem', marginBottom: '0.6rem', color: '#111' }}>{ticker}</div>
-                                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
-                                                                    LOTS
-                                                                    <input
-                                                                        type="number" min="1" max="20"
-                                                                        defaultValue={numLots}
-                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), num_lots: parseInt(e.target.value) || 1 } }))}
-                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
-                                                                    />
-                                                                </label>
-                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
-                                                                    UNITS / LOT
+                                                            <div style={{ fontWeight: 700, fontSize: '0.8rem', marginBottom: '0.5rem', color: '#111' }}>{ticker}</div>
+                                                            {lots.map((units, idx) => (
+                                                                <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.3rem' }}>
+                                                                    <span style={{ fontSize: '0.65rem', fontWeight: 600, color: '#6B7280', minWidth: '32px' }}>L{idx + 1}</span>
                                                                     <input
                                                                         type="number" min="1"
-                                                                        defaultValue={units}
-                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), units_per_lot: parseInt(e.target.value) || 1 } }))}
-                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
+                                                                        value={units}
+                                                                        onChange={e => {
+                                                                            const newLots = [...lots];
+                                                                            newLots[idx] = parseInt(e.target.value) || 1;
+                                                                            setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), lots: newLots } }));
+                                                                        }}
+                                                                        style={{ flex: 1, padding: '0.2rem 0.4rem', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
                                                                     />
-                                                                </label>
-                                                                <label style={{ fontSize: '0.65rem', color: '#6B7280', fontWeight: 600 }}>
-                                                                    LAST LOT PREMIUM ×
-                                                                    <input
-                                                                        type="number" min="1.0" step="0.01"
-                                                                        defaultValue={premium}
-                                                                        onChange={e => setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), last_lot_premium: parseFloat(e.target.value) || 1.0 } }))}
-                                                                        style={{ display: 'block', width: '100%', padding: '0.25rem 0.4rem', marginTop: '2px', border: '1px solid #D1D5DB', fontSize: '0.78rem' }}
-                                                                    />
-                                                                </label>
+                                                                    <span style={{ fontSize: '0.6rem', color: '#9CA3AF' }}>units</span>
+                                                                    {lots.length > 1 && (
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                const newLots = lots.filter((_, i) => i !== idx);
+                                                                                setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), lots: newLots } }));
+                                                                            }}
+                                                                            style={{ background: 'none', border: 'none', color: '#EF4444', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', padding: '0 4px' }}
+                                                                        >×</button>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem' }}>
                                                                 <button
                                                                     onClick={() => {
-                                                                        const c = auctionConfig[ticker] || {};
-                                                                        const defs = { GOLD: [4,10], NVDA: [4,50], BRENT: [4,100], REITS: [4,5] };
-                                                                        setAuctionConfig(
-                                                                            ticker,
-                                                                            c.num_lots ?? defs[ticker][0],
-                                                                            c.units_per_lot ?? defs[ticker][1],
-                                                                            c.last_lot_premium ?? 1.0
-                                                                        ).then(() => toast.success(`${ticker} lot config saved`))
-                                                                        .catch(e => toast.error(e?.response?.data?.detail || 'Failed'));
+                                                                        const last = lots[lots.length - 1] || 10;
+                                                                        setAuctionConfigState(prev => ({ ...prev, [ticker]: { ...(prev[ticker] || {}), lots: [...lots, last] } }));
                                                                     }}
-                                                                    style={{ marginTop: '0.3rem', padding: '0.3rem', background: '#000', color: '#FFF', border: 'none', fontWeight: 700, fontSize: '0.7rem', cursor: 'pointer', width: '100%' }}
-                                                                >
-                                                                    SAVE
-                                                                </button>
+                                                                    style={{ flex: 1, padding: '0.25rem', background: '#F3F4F6', border: '1px solid #D1D5DB', fontSize: '0.65rem', fontWeight: 600, cursor: 'pointer' }}
+                                                                >+ ADD LOT</button>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        setAuctionConfig(ticker, lots)
+                                                                            .then(() => toast.success(`${ticker} lot config saved`))
+                                                                            .catch(e => toast.error(e?.response?.data?.detail || 'Failed'));
+                                                                    }}
+                                                                    style={{ flex: 1, padding: '0.25rem', background: '#000', color: '#FFF', border: 'none', fontWeight: 700, fontSize: '0.65rem', cursor: 'pointer' }}
+                                                                >SAVE</button>
                                                             </div>
                                                         </div>
                                                     );

@@ -150,6 +150,9 @@ class MarketState(SQLModel, table=True):
     # Team starting capital (used when creating new team accounts)
     team_starting_capital: float = Field(default=1_000_000.0)
 
+    # Auto-news templates for price nudges (JSON: {ticker: {up: [{title, content}], down: [{title, content}]}})
+    auto_news_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+
 
 
 class PriceHistory(SQLModel, table=True):

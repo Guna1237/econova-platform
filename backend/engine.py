@@ -498,46 +498,94 @@ class MarketEngine:
     }
     
     def create_auction_lots(self, ticker: str):
-        """Create multiple lots for an asset auction"""
+        """Create multiple lots for an asset auction, preserving already-sold lots."""
         asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
         if not asset:
             raise ValueError(f"Asset {ticker} not found")
-        
-        # Clear old lots
-        old_lots = self.session.exec(select(AuctionLot).where(AuctionLot.asset_ticker == ticker)).all()
+
+        # Keep SOLD lots intact — only clear unsold ones (PENDING, ACTIVE, CANCELLED)
+        old_lots = self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.seller_id.is_(None),  # Only admin-created lots
+            )
+        ).all()
+        sold_lot_numbers = set()
         for lot in old_lots:
-            self.session.delete(lot)
-        
-        # Create new lots — prefer admin-configured layout, fall back to LOT_CONFIGS
+            if lot.status == LotStatus.SOLD:
+                sold_lot_numbers.add(lot.lot_number)
+            else:
+                # Delete orphaned bids for this lot before deleting the lot
+                old_bids = self.session.exec(
+                    select(AuctionBid).where(AuctionBid.lot_id == lot.id)
+                ).all()
+                for bid in old_bids:
+                    self.session.delete(bid)
+                self.session.delete(lot)
+
+        # Build lot config — prefer admin-configured per-lot layout, fall back to LOT_CONFIGS
         state = self.session.exec(select(MarketState)).first()
         custom = (state.auction_config or {}).get(ticker) if state else None
-        if custom:
+        if custom and "lots" in custom:
+            lot_config = [(int(u), 1.0) for u in custom["lots"]]
+        elif custom and "num_lots" in custom:
             num_lots = int(custom.get("num_lots", 4))
             units = int(custom.get("units_per_lot", 10))
             premium = float(custom.get("last_lot_premium", 1.0))
             lot_config = [(units, 1.0)] * (num_lots - 1) + [(units, premium)]
         else:
-            lot_config = self.LOT_CONFIGS.get(ticker, [(10, 1.0)])  # Default config
-        
+            lot_config = self.LOT_CONFIGS.get(ticker, [(10, 1.0)])
+
+        # Only create lots whose number hasn't already been sold
+        first_unsold = True
         for lot_num, (quantity, price_mult) in enumerate(lot_config, 1):
+            if lot_num in sold_lot_numbers:
+                continue  # Already auctioned — skip
             lot = AuctionLot(
                 asset_ticker=ticker,
                 lot_number=lot_num,
                 quantity=quantity,
                 base_price=asset.base_price * price_mult,
-                status=LotStatus.ACTIVE if lot_num == 1 else LotStatus.PENDING
+                status=LotStatus.ACTIVE if first_unsold else LotStatus.PENDING
             )
             self.session.add(lot)
-        
+            first_unsold = False
+
         self.session.commit()
     
     def start_auction(self, ticker: str):
-        """Start auction with multiple lots"""
+        """Start auction with multiple lots. Raises if all lots already sold."""
+        # Check if all configured lots are already sold before switching phase
+        asset = self.session.exec(select(Asset).where(Asset.ticker == ticker)).first()
+        if not asset:
+            raise ValueError(f"Asset {ticker} not found")
+
+        # Pre-check: count sold lots vs total configured lots
+        sold_count = len(self.session.exec(
+            select(AuctionLot).where(
+                AuctionLot.asset_ticker == ticker,
+                AuctionLot.seller_id.is_(None),
+                AuctionLot.status == LotStatus.SOLD,
+            )
+        ).all())
+
+        state_obj = self.session.exec(select(MarketState)).first()
+        custom = (state_obj.auction_config or {}).get(ticker) if state_obj else None
+        if custom and "lots" in custom:
+            total_lots = len(custom["lots"])
+        elif custom and "num_lots" in custom:
+            total_lots = int(custom.get("num_lots", 4))
+        else:
+            total_lots = len(self.LOT_CONFIGS.get(ticker, [(10, 1.0)]))
+
+        if sold_count >= total_lots:
+            raise ValueError(f"All {total_lots} lots for {ticker} have already been auctioned. Reconfigure lots to auction more.")
+
         state = self.get_state()
         state.phase = "AUCTION"
         state.active_auction_asset = ticker
         self.session.add(state)
-        
+
         self.create_auction_lots(ticker)
         self.session.commit()
     
@@ -843,9 +891,24 @@ class MarketEngine:
     def end_auction(self):
         """Admin-controlled: close the auction entirely after all lots are done."""
         state = self.get_state()
+        ticker = state.active_auction_asset
         state.active_auction_asset = None
         state.phase = "TRADING"
         self.session.add(state)
+
+        # Cancel any remaining PENDING/ACTIVE admin-created lots so they aren't re-auctioned
+        if ticker:
+            remaining = self.session.exec(
+                select(AuctionLot).where(
+                    AuctionLot.asset_ticker == ticker,
+                    AuctionLot.seller_id.is_(None),
+                    AuctionLot.status.in_([LotStatus.PENDING, LotStatus.ACTIVE]),
+                )
+            ).all()
+            for lot in remaining:
+                lot.status = LotStatus.CANCELLED
+                self.session.add(lot)
+
         self.session.commit()
         return {"message": "Auction ended. Market returned to TRADING phase."}
 
@@ -853,6 +916,10 @@ class MarketEngine:
     def execute_trade(self, buyer_id: int, seller_id: int, asset_id: int, qty: int, price: float):
         if buyer_id == seller_id:
             raise ValueError("Self-trade not allowed")
+        if qty <= 0:
+            raise ValueError("Quantity must be positive")
+        if price <= 0:
+            raise ValueError("Price must be positive")
         state = self.session.exec(select(MarketState)).first()
         if state and state.phase == "FINISHED":
             raise ValueError("Trading has ended")

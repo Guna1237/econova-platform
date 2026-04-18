@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from typing import List, Optional, Literal
 import asyncio
+import random
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, select, func
@@ -92,6 +93,8 @@ class LoanOfferCreate(BaseModel):
     def rate_non_negative(cls, v):
         if v < 0:
             raise ValueError('Interest rate cannot be negative')
+        if v > 50:
+            raise ValueError('Interest rate cannot exceed 50% per quarter')
         return v
 
 class PrivateOfferCreate(BaseModel):
@@ -531,9 +534,7 @@ async def toggle_leaderboard(
 
 class AuctionConfigBody(BaseModel):
     ticker: str
-    num_lots: int
-    units_per_lot: int
-    last_lot_premium: float = 1.0
+    lots: list  # Array of unit counts per lot, e.g. [5, 10, 15, 20]
 
 
 @app.post("/admin/auction/config")
@@ -542,16 +543,16 @@ def set_auction_config(
     admin: User = Depends(get_current_admin),
     session: Session = Depends(get_session),
 ):
-    """Set per-asset auction lot configuration."""
+    """Set per-asset auction lot configuration. lots = array of unit counts per lot."""
+    if not body.lots or len(body.lots) < 1:
+        raise HTTPException(status_code=400, detail="At least 1 lot required")
+    if any(u < 1 for u in body.lots):
+        raise HTTPException(status_code=400, detail="Each lot must have at least 1 unit")
     state = session.exec(select(MarketState)).first()
     if not state:
         raise HTTPException(status_code=404, detail="No market state")
     current = dict(state.auction_config or {})
-    current[body.ticker.upper()] = {
-        "num_lots": body.num_lots,
-        "units_per_lot": body.units_per_lot,
-        "last_lot_premium": body.last_lot_premium,
-    }
+    current[body.ticker.upper()] = {"lots": [int(u) for u in body.lots]}
     state.auction_config = current
     session.add(state)
     session.commit()
@@ -650,6 +651,7 @@ async def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_active_use
         raise HTTPException(status_code=400, detail="Credit facility is currently locked by admin")
     borrower = session.exec(select(User).where(User.username == offer.borrower_username)).first()
     if not borrower: raise HTTPException(status_code=404, detail="User not found")
+    if borrower.id == user.id: raise HTTPException(status_code=400, detail="Cannot lend to yourself")
     if user.cash < offer.principal: raise HTTPException(status_code=400, detail="Insufficient funds")
     
     loan = TeamLoan(
@@ -856,7 +858,7 @@ async def request_mortgage(req: MortgageRequest, user: User = Depends(get_active
     # Check for duplicate pending requests
     existing = session.exec(
         select(MortgageLoan).where(
-            MortgageLoan.created_at == user.id,
+            MortgageLoan.borrower_id == user.id,
             MortgageLoan.status == MortgageStatus.PENDING
         )
     ).all()
@@ -1603,7 +1605,10 @@ async def open_auction(ticker: str, user: User = Depends(get_current_admin), ses
     logger = ActivityLogger(session)
     if ticker == 'TBILL':
         raise HTTPException(status_code=400, detail="US Treasury Bills are not auctioned. Players buy them directly.")
-    sim.start_auction(ticker)
+    try:
+        sim.start_auction(ticker)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     logger.log_action(user_id=user.id, action_type="ADMIN_OPEN_AUCTION", action_details={"ticker": ticker})
     await ws_manager.broadcast("auction_update", {"action": "opened", "ticker": ticker})
     return {"message": f"Auction opened for {ticker}"}
@@ -1743,16 +1748,30 @@ def get_lot_bids(lot_id: int, user: User = Depends(get_current_user), session: S
 
 # --- ADMIN PRICE NUDGE ---
 
+# Default auto-news templates when admin hasn't configured custom ones
+_DEFAULT_AUTO_NEWS = {
+    "up": [
+        {"title": "{asset_name} Surges on Strong Demand", "content": "{ticker} prices jumped {change_pct}% amid renewed investor confidence. Analysts cite robust fundamentals and favourable macro conditions driving the rally from ${old_price} to ${new_price}."},
+        {"title": "Bullish Momentum Lifts {ticker}", "content": "Strong buying pressure pushed {asset_name} up {change_pct}% today. Market observers note increased institutional interest as prices moved from ${old_price} to ${new_price}."},
+        {"title": "{ticker} Rally: Growth Outlook Improves", "content": "{asset_name} advanced {change_pct}% as positive economic indicators bolster growth expectations. The asset moved from ${old_price} to ${new_price}, outpacing sector peers."},
+    ],
+    "down": [
+        {"title": "{asset_name} Slides on Market Concerns", "content": "{ticker} fell {change_pct}% as investors weighed rising uncertainty. The decline from ${old_price} to ${new_price} reflects growing caution across markets."},
+        {"title": "Selloff Hits {ticker} Amid Headwinds", "content": "{asset_name} dropped {change_pct}% under pressure from adverse market conditions. Prices retreated from ${old_price} to ${new_price} on elevated selling volume."},
+        {"title": "{ticker} Under Pressure: Analysts Flag Risks", "content": "Mounting concerns sent {asset_name} down {change_pct}% today. The move from ${old_price} to ${new_price} has traders watching key support levels closely."},
+    ],
+}
+
 @app.post("/admin/price/nudge")
-def nudge_asset_price(
+async def nudge_asset_price(
     nudge: PriceNudge,
     user: User = Depends(get_current_admin),
     session: Session = Depends(get_session)
 ):
-    """Adjust asset price by percentage or absolute amount"""
+    """Adjust asset price by percentage or absolute amount, with optional auto-news generation"""
     admin_tools = AdminTools(session)
     logger = ActivityLogger(session)
-    
+
     try:
         result = admin_tools.nudge_price(
             ticker=nudge.ticker,
@@ -1760,17 +1779,115 @@ def nudge_asset_price(
             adjustment_abs=nudge.adjustment_abs,
             admin_username=user.username
         )
-        
+
         # Log the action
         logger.log_action(
             user_id=user.id,
             action_type="ADMIN_PRICE_NUDGE",
             action_details=result
         )
-        
+
+        # --- Auto-news generation ---
+        change_pct = result.get("change_pct", 0)
+        if abs(change_pct) >= 0.5:  # Only generate news for moves >= 0.5%
+            state = session.exec(select(MarketState)).first()
+            asset = session.exec(select(Asset).where(Asset.ticker == nudge.ticker)).first()
+            asset_name = asset.name if asset else nudge.ticker
+
+            # Determine direction
+            direction = "up" if change_pct > 0 else "down"
+
+            # Get templates: custom per-ticker first, then custom defaults, then built-in defaults
+            custom_config = (state.auto_news_config or {}) if state else {}
+            ticker_templates = custom_config.get(nudge.ticker, {}).get(direction)
+            default_templates = custom_config.get("_default", {}).get(direction)
+            templates = ticker_templates or default_templates or _DEFAULT_AUTO_NEWS[direction]
+
+            if templates:
+                template = random.choice(templates)
+                fmt = {
+                    "ticker": nudge.ticker,
+                    "asset_name": asset_name,
+                    "change_pct": f"{abs(change_pct):.1f}",
+                    "old_price": f"{result['old_price']:,.2f}",
+                    "new_price": f"{result['new_price']:,.2f}",
+                }
+                title = template["title"].format(**fmt)
+                content = template["content"].format(**fmt)
+
+                news_item = NewsItem(
+                    title=title,
+                    content=content,
+                    is_published=True,
+                    source="Market Wire",
+                    published_at=datetime.now(timezone.utc),
+                    sim_year=state.current_year if state else None,
+                    sim_quarter=state.current_quarter if state else None,
+                    category="market",
+                )
+                session.add(news_item)
+                session.commit()
+
+                await ws_manager.broadcast("news_update", {"title": title})
+                result["auto_news"] = title
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- AUTO-NEWS CONFIG ---
+
+class AutoNewsTemplate(BaseModel):
+    title: str
+    content: str
+
+class AutoNewsConfigBody(BaseModel):
+    ticker: str  # asset ticker or "_default" for fallback templates
+    up: list[dict]  # [{title, content}] — templates for price increases
+    down: list[dict]  # [{title, content}] — templates for price decreases
+
+@app.get("/admin/auto-news/config")
+def get_auto_news_config(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get current auto-news template configuration"""
+    state = session.exec(select(MarketState)).first()
+    return {
+        "config": state.auto_news_config or {} if state else {},
+        "defaults": _DEFAULT_AUTO_NEWS,
+        "placeholders": ["{ticker}", "{asset_name}", "{change_pct}", "{old_price}", "{new_price}"],
+    }
+
+@app.post("/admin/auto-news/config")
+def set_auto_news_config(body: AutoNewsConfigBody, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Set auto-news templates for a specific ticker (or '_default' for fallback)"""
+    state = session.exec(select(MarketState)).first()
+    if not state:
+        raise HTTPException(status_code=404, detail="MarketState not found")
+
+    config = dict(state.auto_news_config or {})
+    config[body.ticker] = {
+        "up": [{"title": t["title"], "content": t["content"]} for t in body.up],
+        "down": [{"title": t["title"], "content": t["content"]} for t in body.down],
+    }
+    state.auto_news_config = config
+    session.add(state)
+    session.commit()
+    return {"message": f"Auto-news templates saved for {body.ticker}"}
+
+@app.delete("/admin/auto-news/config/{ticker}")
+def delete_auto_news_config(ticker: str, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Remove custom auto-news templates for a ticker (reverts to defaults)"""
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.auto_news_config:
+        raise HTTPException(status_code=404, detail="No auto-news config found")
+
+    config = dict(state.auto_news_config)
+    if ticker in config:
+        del config[ticker]
+        state.auto_news_config = config if config else None
+        session.add(state)
+        session.commit()
+    return {"message": f"Auto-news templates removed for {ticker}. Using defaults."}
 
 
 # --- ADMIN CREDENTIALS ---
@@ -3350,15 +3467,18 @@ async def approve_banker_request(
         raise HTTPException(status_code=404, detail="Banker not found")
 
     if req.request_type == BankerRequestType.ASSET_REQUEST:
-        # Grant assets to banker
+        # Grant assets to banker — look up asset by ticker
+        asset = session.exec(select(Asset).where(Asset.ticker == req.asset_ticker)).first()
+        if not asset:
+            raise HTTPException(status_code=404, detail=f"Asset {req.asset_ticker} not found")
         holding = session.exec(
-            select(Holding).where(Holding.user_id == banker.id, Holding.asset_ticker == req.asset_ticker)
+            select(Holding).where(Holding.user_id == banker.id, Holding.asset_id == asset.id)
         ).first()
         if holding:
             holding.quantity += req.quantity
             session.add(holding)
         else:
-            session.add(Holding(user_id=banker.id, asset_ticker=req.asset_ticker, quantity=req.quantity, avg_cost=0))
+            session.add(Holding(user_id=banker.id, asset_id=asset.id, quantity=req.quantity, avg_cost=0))
 
     elif req.request_type == BankerRequestType.BAILOUT:
         # Execute the bailout: create a loan from banker to team
@@ -3526,11 +3646,11 @@ async def seed_history(user: User = Depends(get_current_admin), session: Session
         asset.current_price = prices[-1]
         session.add(asset)
 
-    # After seeding, simulation starts at Year 0 Q1 (the actual game begins)
+    # After seeding, set state to Y-1 Q4 so the first "advance quarter" creates Y0 Q1 prices
     state = session.exec(select(MarketState)).first()
     if state:
-        state.current_year = 0
-        state.current_quarter = 1
+        state.current_year = -1
+        state.current_quarter = 4
         session.add(state)
 
     # Remap seed news sim_year from 1→-2, 2→-1 to match negative year backdrop

@@ -279,6 +279,20 @@ export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs) => {
     return response.data;
 };
 
+// --- AUTO-NEWS CONFIG ---
+export const getAutoNewsConfig = async () => {
+    const response = await default_api.get('/admin/auto-news/config');
+    return response.data;
+};
+export const setAutoNewsConfig = async (ticker, up, down) => {
+    const response = await default_api.post('/admin/auto-news/config', { ticker, up, down });
+    return response.data;
+};
+export const deleteAutoNewsConfig = async (ticker) => {
+    const response = await default_api.delete(`/admin/auto-news/config/${ticker}`);
+    return response.data;
+};
+
 // --- ADMIN CREDENTIALS ---
 export const updateAdminCredentials = async (newUsername, newPassword) => {
     const response = await default_api.post('/admin/credentials/update', {
@@ -674,13 +688,8 @@ export const getAuctionConfig = async () => {
     return response.data;
 };
 
-export const setAuctionConfig = async (ticker, numLots, unitsPerLot, lastLotPremium = 1.0) => {
-    const response = await default_api.post('/admin/auction/config', {
-        ticker,
-        num_lots: numLots,
-        units_per_lot: unitsPerLot,
-        last_lot_premium: lastLotPremium,
-    });
+export const setAuctionConfig = async (ticker, lots) => {
+    const response = await default_api.post('/admin/auction/config', { ticker, lots });
     return response.data;
 };
 

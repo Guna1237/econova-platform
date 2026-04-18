@@ -77,6 +77,8 @@ def _run_migrations():
         ("marketstate", "auction_config", "TEXT DEFAULT NULL"),
         # MarketState: configurable team starting capital
         ("marketstate", "team_starting_capital", "REAL DEFAULT 1000000.0"),
+        # MarketState: auto-news templates for price nudges
+        ("marketstate", "auto_news_config", "TEXT DEFAULT NULL"),
     ]
     
     with engine.connect() as conn:
