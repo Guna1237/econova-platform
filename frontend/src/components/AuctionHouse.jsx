@@ -358,7 +358,7 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                             </div>
                                         </div>
                                         <div>
-                                            <div className="text-label">Base Price</div>
+                                            <div className="text-label">Base Price <span style={{ fontWeight: 400, color: '#9CA3AF' }}>(per unit)</span></div>
                                             <div className="mono-num" style={{ fontSize: '1.5rem', fontWeight: 700 }}>
                                                 ${selectedLot.base_price.toFixed(2)}
                                             </div>
@@ -366,7 +366,7 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                     </div>
 
                                     <div style={{ borderTop: '1px solid #E5E7EB', paddingTop: '1rem' }}>
-                                        <div className="text-label">Current Highest Bid</div>
+                                        <div className="text-label">Current Highest Bid <span style={{ fontWeight: 400, color: '#9CA3AF' }}>(per unit)</span></div>
                                         <div className="flex-between">
                                             <div className="mono-num" style={{ fontSize: '2rem', fontWeight: 700, color: '#D1202F' }}>
                                                 ${selectedLot.highest_bid ? selectedLot.highest_bid.toLocaleString() : '---'}
@@ -384,8 +384,13 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                 </div>
 
                                 <div className="fintech-card">
-                                    <div className="text-label">PLACE YOUR BID</div>
-                                    <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.5rem' }}>
+                                        <div className="text-label" style={{ marginBottom: 0 }}>PLACE YOUR BID</div>
+                                        <span style={{ fontSize: '0.72rem', color: '#6B7280', fontStyle: 'italic' }}>
+                                            $ per unit &times; {selectedLot.quantity} units = total cost
+                                        </span>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '1rem', marginBottom: '0.4rem' }}>
                                         <input
                                             type="number"
                                             className="input-field mono-num"
@@ -408,6 +413,15 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                             {loading ? '...' : (selectedLot.status === 'active' ? 'BID' : selectedLot.status.toUpperCase())}
                                         </button>
                                     </div>
+                                    {bidAmount && !isNaN(parseFloat(bidAmount)) && (
+                                        <div style={{ fontSize: '0.78rem', color: '#374151', marginBottom: '0.75rem', padding: '0.4rem 0.6rem', background: '#F9FAFB', borderRadius: 4, border: '1px solid #E5E7EB' }}>
+                                            <span style={{ color: '#6B7280' }}>Total cost: </span>
+                                            <span className="mono-num" style={{ fontWeight: 700 }}>
+                                                ${(parseFloat(bidAmount) * selectedLot.quantity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            </span>
+                                            <span style={{ color: '#6B7280' }}> ({selectedLot.quantity} units @ ${parseFloat(bidAmount).toLocaleString()} /unit)</span>
+                                        </div>
+                                    )}
 
                                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
                                         <button

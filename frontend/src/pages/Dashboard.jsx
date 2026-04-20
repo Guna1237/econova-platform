@@ -7,7 +7,7 @@ import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
     ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
 } from 'lucide-react';
-import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital, issueDividend } from '../services/api';
+import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital, issueDividend, setInterestRate } from '../services/api';
 import univLogo from '../assets/ip.png';
 import clubLogo from '../assets/image.png';
 import AuctionHouse from '../components/AuctionHouse';
@@ -527,6 +527,14 @@ export default function Dashboard() {
             toast.info(res.message);
             fetchData();
         } catch (e) { toast.error('Failed to set sentiment'); }
+    };
+
+    const handleSetInterestRate = async (level) => {
+        try {
+            const res = await setInterestRate(level);
+            toast.info(res.message);
+            fetchData();
+        } catch (e) { toast.error('Failed to set interest rate'); }
     };
 
     const handleToggleBots = async () => {
@@ -1103,6 +1111,31 @@ export default function Dashboard() {
                                                         </button>
                                                     ))}
                                                     <span style={{ fontSize: '0.72rem', color: '#9CA3AF', marginLeft: '0.5rem' }}>Affects quarterly price growth</span>
+                                                </div>
+                                            </div>
+
+                                            {/* Global Interest Rate Environment */}
+                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #E5E7EB' }}>
+                                                <div className="text-label" style={{ marginBottom: '0.5rem' }}>INTEREST RATE ENVIRONMENT</div>
+                                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                    {['LOW', 'NEUTRAL', 'HIGH'].map(lvl => (
+                                                        <button
+                                                            key={lvl}
+                                                            onClick={() => handleSetInterestRate(lvl)}
+                                                            style={{
+                                                                padding: '0.4rem 0.9rem', fontWeight: 700, fontSize: '0.78rem',
+                                                                cursor: 'pointer', border: '2px solid',
+                                                                borderColor: marketState?.global_interest_rate === lvl ? (lvl === 'LOW' ? '#059669' : lvl === 'HIGH' ? '#D1202F' : '#6B7280') : '#E5E7EB',
+                                                                background: marketState?.global_interest_rate === lvl ? (lvl === 'LOW' ? '#D1FAE5' : lvl === 'HIGH' ? '#FEE2E2' : '#F3F4F6') : '#FFF',
+                                                                color: marketState?.global_interest_rate === lvl ? (lvl === 'LOW' ? '#059669' : lvl === 'HIGH' ? '#D1202F' : '#374151') : '#9CA3AF',
+                                                            }}
+                                                        >
+                                                            {lvl === 'LOW' ? '📉' : lvl === 'HIGH' ? '📈' : '⚖️'} {lvl}
+                                                        </button>
+                                                    ))}
+                                                    <span style={{ fontSize: '0.72rem', color: '#9CA3AF', marginLeft: '0.5rem' }}>
+                                                        LOW → REITS+4%/NVDA+2% | HIGH → REITS-8%/NVDA-5%/TBILL+2%/GOLD+2%
+                                                    </span>
                                                 </div>
                                             </div>
 

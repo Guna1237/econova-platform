@@ -4,8 +4,8 @@ import AdminLoanApprovals from '../components/AdminLoanApprovals';
 import AdminMortgageApprovals from '../components/AdminMortgageApprovals';
 import AdminTradeApprovals from '../components/AdminTradeApprovals';
 import { logout } from '../services/api';
-import univLogo from '../assets/univ_logo_clean.png';
-import clubLogo from '../assets/club_logo_clean.png';
+import univLogo from '../assets/ip.png';
+import clubLogo from '../assets/image.png';
 
 export default function SubAdminDashboard() {
     const [activeTab, setActiveTab] = useState('mortgages');

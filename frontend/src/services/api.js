@@ -615,6 +615,11 @@ export const setSentiment = async (sentiment) => {
     return response.data;
 };
 
+export const setInterestRate = async (level) => {
+    const response = await default_api.post('/admin/interest-rate', { level });
+    return response.data;
+};
+
 // --- ADMIN: MARKET MAKER BOTS ---
 export const toggleBots = async () => {
     const response = await default_api.post('/admin/bots/toggle');

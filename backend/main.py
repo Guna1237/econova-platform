@@ -3602,6 +3602,7 @@ async def reset_game(user: User = Depends(get_current_admin), session: Session =
         state.news_feed = "Welcome to Econova Enterprise."
         state.sentiment = "NEUTRAL"
         state.bots_enabled = False
+        state.global_interest_rate = "NEUTRAL"
         session.add(state)
 
     session.commit()
@@ -3718,6 +3719,28 @@ async def set_sentiment_endpoint(
     sim.set_sentiment(body.sentiment)
     await ws_manager.broadcast("market_update", {"action": "sentiment_changed", "sentiment": body.sentiment})
     return {"message": f"Investor sentiment set to {body.sentiment}", "sentiment": body.sentiment}
+
+
+class InterestRateUpdate(BaseModel):
+    level: str  # LOW, NEUTRAL, HIGH
+
+@app.post("/admin/interest-rate")
+async def set_interest_rate(
+    body: InterestRateUpdate,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Set global interest rate environment (LOW / NEUTRAL / HIGH). Affects asset CAGRs and REIT dividends."""
+    if body.level not in ("LOW", "NEUTRAL", "HIGH"):
+        raise HTTPException(status_code=400, detail="level must be LOW, NEUTRAL, or HIGH")
+    state = session.exec(select(MarketState)).first()
+    if not state:
+        raise HTTPException(status_code=404, detail="MarketState not found")
+    state.global_interest_rate = body.level
+    session.add(state)
+    session.commit()
+    await ws_manager.broadcast("market_update", {"action": "interest_rate_changed", "level": body.level})
+    return {"message": f"Interest rate environment set to {body.level}", "level": body.level}
 
 
 # --- ADMIN: MARKET MAKER BOTS ---

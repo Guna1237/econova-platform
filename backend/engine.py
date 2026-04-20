@@ -158,50 +158,89 @@ class MarketEngine:
                         )
                         self.session.add(news)
 
-        # 1. Update Asset Prices
+        # ── helpers ─────────────────────────────────────────────────────────────
+        def _t_variate(sigma: float, df: int = 4) -> float:
+            """Draw from a scaled t-distribution (fat tails, improvement F).
+            df=4 gives realistic market fat-tail behaviour."""
+            z = random.gauss(0, 1)
+            chi2 = sum(random.gauss(0, 1) ** 2 for _ in range(df))
+            return sigma * z / math.sqrt(chi2 / df)
+
+        # E — interest-rate effect on per-asset effective CAGR
+        ir_level = getattr(state, 'global_interest_rate', 'NEUTRAL')
+        IR_DELTA = {  # annual delta added to base_cagr per ticker
+            'LOW':     {'GOLD': 0.01, 'NVDA': 0.02, 'BRENT':  0.01, 'REITS':  0.04, 'TBILL': -0.01},
+            'NEUTRAL': {'GOLD': 0.00, 'NVDA': 0.00, 'BRENT':  0.00, 'REITS':  0.00, 'TBILL':  0.00},
+            'HIGH':    {'GOLD': 0.02, 'NVDA': -0.05, 'BRENT': -0.01, 'REITS': -0.08, 'TBILL':  0.02},
+        }
+        ir_deltas = IR_DELTA.get(ir_level, IR_DELTA['NEUTRAL'])
+
+        # A — cross-asset correlation matrix (applied after individual growths computed)
+        # Structure: CORR[ticker] = [(peer_ticker, weight), ...]
+        CORR = {
+            'GOLD':  [('BRENT',  0.20), ('NVDA', -0.10)],
+            'BRENT': [('GOLD',   0.20), ('REITS', -0.10)],
+            'NVDA':  [('REITS',  0.15), ('GOLD', -0.10)],
+            'REITS': [('NVDA',   0.15), ('BRENT', -0.10)],
+        }
+
+        # G — herd sentiment: count distinct team sellers per asset this quarter
+        # Uses Transaction table; seller role=team implies sell-pressure.
+        from .models import Transaction
+        quarter_trades = self.session.exec(
+            select(Transaction)
+            .where(Transaction.timestamp >= datetime.now(timezone.utc).replace(hour=0, minute=0, second=0))
+        ).all()
+        team_users = {u.id for u in self.session.exec(select(User).where(User.role == Role.TEAM)).all()}
+        sell_counts: dict = {}
+        for t in quarter_trades:
+            if t.seller_id in team_users:
+                sell_counts[t.asset_ticker] = sell_counts.get(t.asset_ticker, 0) + 1
+
+        # 1. Update Asset Prices ────────────────────────────────────────────────
         assets = self.session.exec(select(Asset)).all()
+        asset_map = {a.ticker: a for a in assets}
+
+        # First pass: compute independent growth for each non-TBILL asset
+        independent_growth: dict = {}
+
         for asset in assets:
             # --- US Treasury Bills: guaranteed, risk-free yield ---
             if asset.ticker == 'TBILL':
-                quarterly_yield = asset.base_cagr * quarter_scale
+                ir_adj = ir_deltas.get('TBILL', 0.0)
+                effective_cagr = max(0.005, asset.base_cagr + ir_adj)
+                quarterly_yield = effective_cagr * quarter_scale
                 new_price = asset.current_price * (1 + quarterly_yield)
                 self.session.add(PriceHistory(asset_id=asset.id, year=next_year, quarter=next_q, price=new_price))
                 asset.current_price = new_price
                 self.session.add(asset)
                 continue
-            
-            shock_factor = 0.0
 
-            # Shock Logic — each asset reacts based on real-world fundamentals
+            shock_factor = 0.0
+            # Shock Logic
             if state.shock_stage == 'WARNING':
-                # Pre-shock jitters: market sells risk assets on uncertainty
                 shock_factor = -0.02 * quarter_scale
             elif state.shock_stage == 'CRASH':
                 beta = asset.macro_sensitivity
                 if state.shock_type == 'INFLATION':
-                    # Inflation: commodities win, rate-sensitive and high-multiple assets lose
-                    if asset.ticker == 'GOLD':   shock_factor =  0.12 * quarter_scale  # classic inflation hedge
-                    elif asset.ticker == 'BRENT': shock_factor =  0.10 * quarter_scale  # oil drives inflation, benefits strongly
-                    elif asset.ticker == 'NVDA':  shock_factor = -0.15 * quarter_scale  # high-multiple tech crushed by rising rates
-                    elif asset.ticker == 'REITS': shock_factor = -0.06 * quarter_scale  # higher rates compress property valuations
+                    if asset.ticker == 'GOLD':    shock_factor =  0.12 * quarter_scale
+                    elif asset.ticker == 'BRENT': shock_factor =  0.10 * quarter_scale
+                    elif asset.ticker == 'NVDA':  shock_factor = -0.15 * quarter_scale
+                    elif asset.ticker == 'REITS': shock_factor = -0.06 * quarter_scale
                     else:                         shock_factor = -0.10 * abs(beta) * quarter_scale
                 elif state.shock_type == 'RECESSION':
-                    # Recession: demand collapses for cyclicals; safe havens see inflows
-                    if asset.ticker == 'GOLD':               shock_factor =  0.08 * quarter_scale  # fear + central bank buying
-                    elif asset.ticker in ['BRENT', 'REITS']: shock_factor = -0.15 * quarter_scale  # demand destruction
+                    if asset.ticker == 'GOLD':               shock_factor =  0.08 * quarter_scale
+                    elif asset.ticker in ['BRENT', 'REITS']: shock_factor = -0.15 * quarter_scale
                     else:                                     shock_factor = -0.12 * abs(beta) * quarter_scale
                 else:
                     shock_factor = -0.10 * abs(beta) * quarter_scale
             elif state.shock_stage == 'RECOVERY':
-                # Recovery is gradual and asset-specific, not a uniform bounce
                 shock_factor = (0.08 + (random.random() * 0.07)) * quarter_scale
 
-            # Mean Reversion — pull toward rolling 4-quarter average, or base_price if not enough history
+            # Mean Reversion
             recent_history = self.session.exec(
-                select(PriceHistory)
-                .where(PriceHistory.asset_id == asset.id)
-                .order_by(PriceHistory.id.desc())
-                .limit(4)
+                select(PriceHistory).where(PriceHistory.asset_id == asset.id)
+                .order_by(PriceHistory.id.desc()).limit(4)
             ).all()
             reversion_anchor = (
                 sum(r.price for r in recent_history) / len(recent_history)
@@ -214,56 +253,109 @@ class MarketEngine:
             elif price_ratio > 2.0: k_reversion = -0.10 * quarter_scale
             elif price_ratio > 1.5: k_reversion = -0.05 * quarter_scale
 
-            # Momentum — last quarter's direction has a 15% carry-forward effect
+            # Momentum
             momentum = 0.0
             prev_entries = self.session.exec(
-                select(PriceHistory)
-                .where(PriceHistory.asset_id == asset.id)
-                .order_by(PriceHistory.id.desc())
-                .limit(2)
+                select(PriceHistory).where(PriceHistory.asset_id == asset.id)
+                .order_by(PriceHistory.id.desc()).limit(2)
             ).all()
             if len(prev_entries) >= 2 and prev_entries[1].price > 0:
                 last_return = (prev_entries[0].price - prev_entries[1].price) / prev_entries[1].price
-                momentum = last_return * 0.15
-                momentum = max(min(momentum, 0.03), -0.03)
+                momentum = max(min(last_return * 0.15, 0.03), -0.03)
 
             # Micro Event Impact
             micro_impact = 0.0
-            active_events = self.session.exec(select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)).all()
+            active_events = self.session.exec(
+                select(ActiveEvent).where(ActiveEvent.asset_ticker == asset.ticker)
+            ).all()
             for event in active_events:
                 micro_impact += event.annual_impact * quarter_scale
-                if next_q == 4:  # Tick down events at year-end
+                if next_q == 4:
                     event.remaining_years -= 1
                     if event.remaining_years <= 0:
                         self.session.delete(event)
                     else:
                         self.session.add(event)
 
-            # Final growth calculation - Unbounded
-            noise = random.gauss(0, asset.volatility * 0.8 * math.sqrt(quarter_scale))
-            if random.random() < 0.05:  # 5% chance of an extra surprise swing
+            # F — Fat-tail noise via t-distribution (df=4) instead of Gaussian
+            noise = _t_variate(asset.volatility * 0.8 * math.sqrt(quarter_scale))
+            if random.random() < 0.05:
                 noise += random.choice([-0.02, 0.02])
 
-            # Investor sentiment multiplier (admin-controlled dial)
+            # Sentiment multiplier (admin dial)
             SENTIMENT_MULT = {"BULLISH": 1.25, "NEUTRAL": 1.0, "BEARISH": 0.75}
             sent_mult = SENTIMENT_MULT.get(getattr(state, 'sentiment', 'NEUTRAL'), 1.0)
             noise = noise * sent_mult
-            cagr_component = asset.base_cagr * quarter_scale
-            cagr_component = cagr_component + (cagr_component * (sent_mult - 1.0) * 0.3)
 
-            growth = cagr_component + shock_factor + k_reversion + momentum + micro_impact + noise
-            
-            new_price = asset.current_price * (1 + growth)
-            
-            # Absolute hard floor to prevent zero/negative price technical errors
-            new_price = max(0.10, new_price)
-            
-            # Record quarterly history
+            # E — interest rate adjustment to CAGR
+            ir_adj = ir_deltas.get(asset.ticker, 0.0)
+            cagr_component = (asset.base_cagr + ir_adj) * quarter_scale
+            cagr_component += cagr_component * (sent_mult - 1.0) * 0.3
+
+            # G — herd sell-pressure: ≥3 distinct teams selling → extra bearish nudge
+            herd_pressure = 0.0
+            if sell_counts.get(asset.ticker, 0) >= 3:
+                herd_pressure = -0.015 * quarter_scale  # -1.5% annualised drag
+                # Auto-generate a news blurb about the selling pressure
+                if random.random() < 0.6:
+                    news_blurb = NewsItem(
+                        title=f"Selling Pressure Detected: {asset.name}",
+                        content=(
+                            f"Multiple teams have been liquidating {asset.ticker} positions this period. "
+                            f"Broad-based selling may signal deteriorating confidence in the asset."
+                        ),
+                        is_published=True,
+                        source="Econova Analytics",
+                        published_at=datetime.now(timezone.utc),
+                        sim_year=next_year,
+                        sim_quarter=next_q,
+                        category="market",
+                    )
+                    self.session.add(news_blurb)
+
+            growth = cagr_component + shock_factor + k_reversion + momentum + micro_impact + noise + herd_pressure
+            independent_growth[asset.ticker] = growth
+
+        # A — Second pass: apply cross-asset correlation adjustments
+        for asset in assets:
+            if asset.ticker == 'TBILL':
+                continue
+            if asset.ticker not in independent_growth:
+                continue
+            base_growth = independent_growth[asset.ticker]
+            corr_adjustment = 0.0
+            for peer_ticker, weight in CORR.get(asset.ticker, []):
+                peer_growth = independent_growth.get(peer_ticker, 0.0)
+                corr_adjustment += weight * peer_growth
+            # Dampen correlation during shocks (they're already priced in via shock_factor)
+            if state.shock_stage in ('CRASH', 'WARNING'):
+                corr_adjustment *= 0.3
+            total_growth = base_growth + corr_adjustment
+
+            new_price = max(0.10, asset.current_price * (1 + total_growth))
+
+            # D — REITS quarterly dividend (2% annual → 0.5% per quarter) paid to all holders
+            if asset.ticker == 'REITS':
+                dividend_rate = 0.005  # 0.5% per quarter = 2% annual
+                # Adjust by interest rate: lower rates → higher REIT yield attractiveness
+                if ir_level == 'HIGH':
+                    dividend_rate = 0.003
+                elif ir_level == 'LOW':
+                    dividend_rate = 0.007
+                reit_holders = self.session.exec(
+                    select(Holding).where(Holding.asset_id == asset.id)
+                ).all()
+                for h in reit_holders:
+                    holder = self.session.get(User, h.user_id)
+                    if holder:
+                        dividend = h.quantity * asset.current_price * dividend_rate
+                        holder.cash += dividend
+                        self.session.add(holder)
+
             self.session.add(PriceHistory(asset_id=asset.id, year=next_year, quarter=next_q, price=new_price))
-            
             asset.current_price = new_price
             self.session.add(asset)
-            
+
         # 2. Process Credit (Interest) — quarterly accrual
         loans = self.session.exec(select(TeamLoan).where(TeamLoan.status == LoanStatus.ACTIVE)).all()
         for loan in loans:
@@ -951,9 +1043,9 @@ class MarketEngine:
         else:
             self.session.add(Holding(user_id=buyer_id, asset_id=asset_id, quantity=qty, avg_cost=price))
             
-        # Update Market Price — impact scales with trade size (1 unit = 5%, capped at 30%)
+        # B — Volume-weighted sqrt price impact: large trades move price convexly (real-world slippage)
         asset = self.session.get(Asset, asset_id)
-        trade_impact = min(0.30, 0.05 * qty)
+        trade_impact = min(0.30, 0.05 * math.sqrt(qty))
         asset.current_price = ((1 - trade_impact) * asset.current_price) + (trade_impact * price)
         self.session.add(asset)
         

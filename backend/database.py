@@ -79,6 +79,8 @@ def _run_migrations():
         ("marketstate", "team_starting_capital", "REAL DEFAULT 1000000.0"),
         # MarketState: auto-news templates for price nudges
         ("marketstate", "auto_news_config", "TEXT DEFAULT NULL"),
+        # MarketState: global interest rate environment
+        ("marketstate", "global_interest_rate", "TEXT NOT NULL DEFAULT 'NEUTRAL'"),
     ]
     
     with engine.connect() as conn:

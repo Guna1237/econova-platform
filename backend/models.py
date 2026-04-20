@@ -153,6 +153,9 @@ class MarketState(SQLModel, table=True):
     # Auto-news templates for price nudges (JSON: {ticker: {up: [{title, content}], down: [{title, content}]}})
     auto_news_config: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
+    # Global interest rate environment — affects asset CAGRs and spread
+    global_interest_rate: str = Field(default="NEUTRAL")  # LOW, NEUTRAL, HIGH
+
 
 
 class PriceHistory(SQLModel, table=True):
