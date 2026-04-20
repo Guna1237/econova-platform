@@ -1,10 +1,13 @@
 import axios from 'axios';
 
-// Auto-detect environment: use production URL if deployed, localhost for local dev
+// Auto-detect environment.
+// - Production (Vercel/Render): use VITE_API_URL env var or hard-coded Render URL.
+// - Local dev: use empty string so requests go to the same origin and Vite's dev-server
+//   proxy forwards them to http://localhost:8000 (configured in vite.config.js).
 const API_BASE_URL = import.meta.env.VITE_API_URL ||
     ((window.location.hostname.includes('onrender.com') || window.location.hostname.includes('vercel.app'))
         ? 'https://econova-backend-ybiq.onrender.com'
-        : `http://${window.location.hostname}:8000`);
+        : '');
 
 const default_api = axios.create({
     baseURL: API_BASE_URL,
