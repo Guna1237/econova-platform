@@ -296,6 +296,32 @@ allow_origins = [
     "https://mu-aeon-econova-biddingwars.vercel.app"
 ]
 
+# ── Concurrency limiter ──────────────────────────────────────────────────────
+# Caps simultaneous non-streaming requests to stay within the DB pool size.
+# Returns 503 (client retries) instead of crashing the pool under burst load.
+_active_reqs = 0
+_MAX_CONCURRENT = 18  # DB pool is 20; leave 2 for health checks / migrations
+
+@app.middleware("http")
+async def concurrency_limiter(request, call_next):
+    global _active_reqs
+    # SSE, WebSocket and health check are long-lived or critical — never block them
+    if request.url.path in ("/events", "/ws", "/health"):
+        return await call_next(request)
+    if _active_reqs >= _MAX_CONCURRENT:
+        from fastapi.responses import JSONResponse
+        origin = request.headers.get("origin", "")
+        headers = {"Retry-After": "1"}
+        if origin in allow_origins:
+            headers["Access-Control-Allow-Origin"] = origin
+            headers["Access-Control-Allow-Credentials"] = "true"
+        return JSONResponse({"detail": "Server busy, retry in a moment"}, status_code=503, headers=headers)
+    _active_reqs += 1
+    try:
+        return await call_next(request)
+    finally:
+        _active_reqs -= 1
+
 # Add CORS middleware with specific allowed origins for credential support
 app.add_middleware(
     CORSMiddleware,

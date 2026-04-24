@@ -108,7 +108,7 @@ export default function PriceChart({ asset, lastUpdate }) {
 
             {/* Chart */}
             <div style={{ flex: 1, minHeight: '300px' }}>
-                <ResponsiveContainer>
+                <ResponsiveContainer width="100%" height="100%" minHeight={300}>
                     <AreaChart data={displayData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                         <defs>
                             <linearGradient id={`priceGrad-${asset.id}`} x1="0" y1="0" x2="0" y2="1">
