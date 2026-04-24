@@ -17,6 +17,7 @@ export default function SubAdminDashboard() {
     const [selectedAsset, setSelectedAsset] = useState(null);
     const [lastUpdate, setLastUpdate] = useState(Date.now());
     const [notifications, setNotifications] = useState({ mortgages: false, loans: false, trades: false });
+    const [rtStatus, setRtStatus] = useState('connecting');
 
     const refreshAssets = () => {
         getAssets().then(data => {
@@ -61,7 +62,7 @@ export default function SubAdminDashboard() {
             if (['market_update', 'bid_placed', 'auction_update', 'trade_executed'].includes(msg.type)) {
                 refreshAssets();
             }
-        });
+        }, setRtStatus);
 
         return cleanup;
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -87,6 +88,20 @@ export default function SubAdminDashboard() {
     return (
         <div className="animate-fade-in" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
             <Toaster position="top-right" richColors />
+
+            {/* Backend offline banner */}
+            {rtStatus !== 'connected' && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
+                    background: rtStatus === 'connecting' ? '#1D4ED8' : '#B91C1C',
+                    color: '#FFF', padding: '0.4rem 1rem',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                    fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.05em',
+                }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#FFF', animation: 'pulse 1s infinite' }} />
+                    {rtStatus === 'connecting' ? 'CONNECTING TO SERVER…' : 'SERVER OFFLINE — RECONNECTING…'}
+                </div>
+            )}
 
             {/* Header */}
             <div style={{ background: '#D1202F', padding: '1rem 2rem', color: '#FFF', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, borderBottom: '4px solid #000' }}>

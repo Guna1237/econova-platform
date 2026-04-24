@@ -1,13 +1,29 @@
+databases:
+  - name: econova-db
+    databaseName: econova
+    user: econovagame
+    plan: free               # upgrade to "starter" ($7/mo) for production persistence
+
 services:
   - type: web
     name: econova-backend
     env: python
     region: oregon
     plan: standard
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: >
+      uvicorn backend.main:app
+      --host 0.0.0.0
+      --port $PORT
+      --timeout-keep-alive 65
+      --log-level warning
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
-        value: 3.11.0
+        value: "3.11.0"
       - key: SECRET_KEY
         generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: econova-db
+          property: connectionString

@@ -73,6 +73,7 @@ export default function Dashboard() {
 
     const audioCtxRef = useRef(null);
     const rtStatusRef = useRef('disconnected');
+    const [rtStatus, setRtStatus] = useState('connecting');
 
     const playNotificationSound = (type = 'standard') => {
         try {
@@ -335,6 +336,7 @@ export default function Dashboard() {
             }
         }, (status) => {
             rtStatusRef.current = status;
+            setRtStatus(status);
             // Adjust polling speed based on real-time connection health
             clearInterval(interval);
             if (status === 'connected') {
@@ -633,6 +635,23 @@ export default function Dashboard() {
     return (
         <div className="animate-fade-in" style={{ height: '100dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#FFFFFF' }}>
             <Toaster position="bottom-right" richColors theme="light" />
+
+            {/* Backend offline / reconnecting banner */}
+            {rtStatus !== 'connected' && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
+                    background: rtStatus === 'connecting' ? '#1D4ED8' : '#B91C1C',
+                    color: '#FFF', padding: '0.4rem 1rem',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                    fontSize: '0.78rem', fontWeight: 700, letterSpacing: '0.05em',
+                }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#FFF', animation: 'pulse 1s infinite' }} />
+                    {rtStatus === 'connecting' ? 'CONNECTING TO SERVER…' : 'SERVER OFFLINE — RECONNECTING…'}
+                    <span style={{ fontWeight: 400, opacity: 0.85, marginLeft: '0.5rem' }}>
+                        {rtStatus !== 'connecting' && '(your data is safe — page will auto-refresh when back)'}
+                    </span>
+                </div>
+            )}
 
             {/* Public Leaderboard Overlay */}
             <AnimatePresence>
@@ -1397,6 +1416,30 @@ export default function Dashboard() {
                                                             style={{ width: '100%', marginBottom: '1rem', background: '#000', color: '#FFF', border: '2px solid #000', fontWeight: 700 }}
                                                         >
                                                             ⚖️ SETTLE ALL DEBTS
+                                                        </button>
+                                                        <button
+                                                            onClick={async () => {
+                                                                try {
+                                                                    const base = import.meta.env.VITE_API_URL ||
+                                                                        ((window.location.hostname.includes('onrender.com') || window.location.hostname.includes('vercel.app'))
+                                                                            ? 'https://econova-backend-ybiq.onrender.com' : '');
+                                                                    const res = await fetch(`${base}/admin/game/snapshot`, {
+                                                                        headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
+                                                                    });
+                                                                    if (!res.ok) throw new Error(res.statusText);
+                                                                    const blob = await res.blob();
+                                                                    const url = URL.createObjectURL(blob);
+                                                                    const a = document.createElement('a');
+                                                                    a.href = url;
+                                                                    a.download = `econova_snapshot_${new Date().toISOString().slice(0,16).replace('T','_')}.json`;
+                                                                    a.click();
+                                                                    URL.revokeObjectURL(url);
+                                                                } catch(e) { toast.error('Snapshot failed: ' + e.message); }
+                                                            }}
+                                                            className="btn"
+                                                            style={{ width: '100%', marginBottom: '1rem', background: '#1D4ED8', color: '#FFF', border: '2px solid #1D4ED8', fontWeight: 700 }}
+                                                        >
+                                                            💾 DOWNLOAD SNAPSHOT
                                                         </button>
                                                         <button
                                                             onClick={() => setShowResetModal(true)}

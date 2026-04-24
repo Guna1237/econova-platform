@@ -243,6 +243,30 @@ ws_manager = ConnectionManager()
 
 app = FastAPI(title="Econova API", lifespan=lifespan)
 
+# Global exception handler — prevents any unhandled exception from crashing the worker
+from fastapi import Request as _Request
+from fastapi.responses import JSONResponse as _JSONResponse
+@app.exception_handler(Exception)
+async def _global_exc_handler(request: _Request, exc: Exception):
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return _JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+# Health check — used by Render to verify the service is alive
+@app.get("/health")
+def health_check(session: Session = Depends(get_session)):
+    try:
+        state = session.exec(select(MarketState)).first()
+        return {
+            "status": "healthy",
+            "year": state.current_year if state else 0,
+            "quarter": state.current_quarter if state else 0,
+            "phase": state.phase if state else "UNKNOWN",
+            "sse_clients": len(sse_manager.clients),
+        }
+    except Exception as e:
+        logger.error("Health check failed: %s", e)
+        return _JSONResponse(status_code=503, content={"status": "degraded", "error": str(e)})
+
 # Restrict CORS in production
 environment = os.getenv("ENVIRONMENT", "development")
 
@@ -3611,6 +3635,183 @@ async def reject_banker_request(
 
 
 # ============ NEW FEATURE ENDPOINTS ============
+
+# --- ADMIN: GAME STATE SNAPSHOT (backup / restore) ---
+
+@app.get("/admin/game/snapshot")
+def game_snapshot(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Export the complete live game state as a downloadable JSON snapshot.
+    Download this before any risky operation or deployment — use /admin/game/restore to replay it."""
+    from datetime import timezone as _tz
+    import json as _json
+
+    def _rows(model):
+        rows = session.exec(select(model)).all()
+        out = []
+        for r in rows:
+            try:
+                d = r.model_dump()
+            except Exception:
+                d = {c: getattr(r, c, None) for c in r.__table__.columns.keys()}
+            # datetime → ISO string for JSON
+            for k, v in d.items():
+                if hasattr(v, 'isoformat'):
+                    d[k] = v.isoformat()
+            out.append(d)
+        return out
+
+    snapshot = {
+        "version": 2,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "market_state": _rows(MarketState),
+        "assets": _rows(Asset),
+        "price_history": _rows(PriceHistory),
+        "users": _rows(User),
+        "holdings": _rows(Holding),
+        "team_loans": _rows(TeamLoan),
+        "loan_approvals": _rows(LoanApproval),
+        "mortgage_loans": _rows(MortgageLoan),
+        "auction_lots": _rows(AuctionLot),
+        "auction_bids": _rows(AuctionBid),
+        "private_offers": _rows(PrivateOffer),
+        "trade_approvals": _rows(TradeApproval),
+        "transactions": _rows(Transaction),
+        "news_items": _rows(NewsItem),
+        "active_events": _rows(ActiveEvent),
+    }
+
+    content = _json.dumps(snapshot, indent=2, default=str)
+    from fastapi.responses import Response as _Resp
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+    return _Resp(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="econova_snapshot_{ts}.json"'},
+    )
+
+
+class SnapshotRestoreBody(BaseModel):
+    snapshot: dict
+    restore_teams: bool = True          # restore team cash/debt/holdings
+    restore_market_state: bool = True   # restore year/quarter/phase/prices
+    restore_loans: bool = True
+    restore_news: bool = False          # usually not needed
+
+@app.post("/admin/game/restore")
+def game_restore(
+    body: SnapshotRestoreBody,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+):
+    """Restore a previously taken snapshot. Selective: choose which parts to replay.
+    WARNING — replaces live data for the selected sections."""
+    snap = body.snapshot
+    restored = []
+
+    def _parse_dt(v):
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v)
+            except Exception:
+                return None
+        return v
+
+    # 1. Market state (year, quarter, phase, shock, prices via asset records)
+    if body.restore_market_state and snap.get("market_state"):
+        ms_data = snap["market_state"][0] if snap["market_state"] else None
+        if ms_data:
+            ms = session.exec(select(MarketState)).first()
+            if ms:
+                skip = {"id"}
+                for k, v in ms_data.items():
+                    if k in skip:
+                        continue
+                    try:
+                        setattr(ms, k, v)
+                    except Exception:
+                        pass
+                session.add(ms)
+        restored.append("market_state")
+
+    # 2. Asset prices (restore current_price only — don't touch base config)
+    if body.restore_market_state and snap.get("assets"):
+        for a_data in snap["assets"]:
+            asset = session.exec(select(Asset).where(Asset.ticker == a_data.get("ticker"))).first()
+            if asset and a_data.get("current_price") is not None:
+                asset.current_price = float(a_data["current_price"])
+                session.add(asset)
+        restored.append("asset_prices")
+
+    # 3. Teams — restore cash and debt only (never overwrite passwords/roles)
+    if body.restore_teams and snap.get("users"):
+        for u_data in snap["users"]:
+            if u_data.get("role") not in ("team", "banker"):
+                continue
+            team = session.exec(select(User).where(User.username == u_data["username"])).first()
+            if team:
+                team.cash = float(u_data.get("cash", team.cash))
+                team.debt = float(u_data.get("debt", team.debt))
+                team.is_frozen = bool(u_data.get("is_frozen", team.is_frozen))
+                session.add(team)
+        restored.append("team_balances")
+
+    # 4. Holdings — wipe and re-insert for affected teams
+    if body.restore_teams and snap.get("holdings"):
+        team_usernames = {u["username"] for u in snap.get("users", []) if u.get("role") == "team"}
+        for h_data in snap["holdings"]:
+            owner = session.get(User, h_data.get("user_id"))
+            if not owner or owner.username not in team_usernames:
+                continue
+            asset = session.get(Asset, h_data.get("asset_id"))
+            if not asset:
+                continue
+            existing = session.exec(
+                select(Holding).where(Holding.user_id == owner.id, Holding.asset_id == asset.id)
+            ).first()
+            if existing:
+                existing.quantity = h_data.get("quantity", existing.quantity)
+                existing.avg_cost = h_data.get("avg_cost", existing.avg_cost)
+                existing.realized_pnl = h_data.get("realized_pnl", existing.realized_pnl)
+                session.add(existing)
+            else:
+                session.add(Holding(
+                    user_id=owner.id, asset_id=asset.id,
+                    quantity=h_data.get("quantity", 0),
+                    avg_cost=h_data.get("avg_cost", 0.0),
+                    realized_pnl=h_data.get("realized_pnl", 0.0),
+                ))
+        restored.append("holdings")
+
+    # 5. Loans
+    if body.restore_loans and snap.get("team_loans"):
+        for l_data in snap["team_loans"]:
+            loan = session.get(TeamLoan, l_data.get("id"))
+            if loan:
+                loan.remaining_balance = float(l_data.get("remaining_balance", loan.remaining_balance))
+                loan.total_repaid = float(l_data.get("total_repaid", loan.total_repaid))
+                loan.status = l_data.get("status", loan.status)
+                session.add(loan)
+        restored.append("loans")
+
+    # 6. News items (optional)
+    if body.restore_news and snap.get("news_items"):
+        for n_data in snap["news_items"]:
+            existing = session.get(NewsItem, n_data.get("id"))
+            if not existing:
+                session.add(NewsItem(
+                    title=n_data.get("title", ""),
+                    content=n_data.get("content", ""),
+                    is_published=n_data.get("is_published", False),
+                    source=n_data.get("source", "Snapshot"),
+                    sim_year=n_data.get("sim_year"),
+                    sim_quarter=n_data.get("sim_quarter"),
+                    category=n_data.get("category", "market"),
+                ))
+        restored.append("news_items")
+
+    session.commit()
+    return {"message": f"Snapshot restored: {', '.join(restored)}", "sections": restored}
+
 
 # --- ADMIN: RESET GAME ---
 
