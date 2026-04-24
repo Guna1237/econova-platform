@@ -332,7 +332,9 @@ export default function Dashboard() {
             }
 
             if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed', 'news_update'].includes(msg.type)) {
-                fetchData();
+                // Jitter: spread 30 simultaneous SSE callbacks over 1.5s to prevent
+                // thundering herd (30 teams × 4 endpoints = 120 simultaneous DB hits)
+                setTimeout(fetchData, Math.random() * 1500);
             }
         }, (status) => {
             rtStatusRef.current = status;

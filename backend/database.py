@@ -16,8 +16,8 @@ if database_url and (database_url.startswith("postgres://") or database_url.star
         database_url,
         echo=False,
         # Render PostgreSQL caps at 25 connections — stay well under that limit.
-        pool_size=5,
-        max_overflow=10,        # max 15 total connections
+        pool_size=15,
+        max_overflow=5,         # max 20 total connections
         pool_timeout=10,        # fail fast instead of hanging 30s
         pool_recycle=300,       # recycle idle connections every 5 min
         pool_pre_ping=True,     # discard stale connections before use
@@ -123,9 +123,12 @@ def create_db_and_tables():
     # Run schema migrations for existing DBs
     _run_migrations()
 
-    # Dispose connection pool so all subsequent connections see the updated schema
-    engine.dispose()
-    
+    # For SQLite: dispose pool so all subsequent connections see the updated schema.
+    # For PostgreSQL: do NOT dispose — connections are already schema-aware and
+    # disposing wipes the warm pool, causing a thundering herd on the first request wave.
+    if is_sqlite:
+        engine.dispose()
+
     # SQLite-specific optimizations (skip on Postgres)
     if is_sqlite:
         with engine.connect() as connection:
