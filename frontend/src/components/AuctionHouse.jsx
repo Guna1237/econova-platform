@@ -12,6 +12,9 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
     const [bidAmount, setBidAmount] = useState('');
     const [loading, setLoading] = useState(false);
     const [lastLotResult, setLastLotResult] = useState(null); // Track post-hammer state
+    const [cooldownEnd, setCooldownEnd] = useState(null);   // Date.now() ms when cooldown expires
+    const [cooldownLeft, setCooldownLeft] = useState(0);    // seconds remaining (for display)
+    const BID_COOLDOWN = 15;                                // must match backend BID_COOLDOWN_SECONDS
 
     const isActive = marketState?.phase === 'AUCTION';
     const currentTicker = marketState?.active_auction_asset;
@@ -59,6 +62,19 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
         return () => clearInterval(interval);
     }, [isActive, currentTicker, lastUpdate]);
 
+    // Bid cooldown countdown
+    useEffect(() => {
+        if (!cooldownEnd) { setCooldownLeft(0); return; }
+        const tick = () => {
+            const left = Math.max(0, (cooldownEnd - Date.now()) / 1000);
+            setCooldownLeft(left);
+            if (left === 0) setCooldownEnd(null);
+        };
+        tick();
+        const t = setInterval(tick, 100);
+        return () => clearInterval(t);
+    }, [cooldownEnd]);
+
     // Always fetch user's own listings regardless of auction phase
     useEffect(() => {
         const fetchMyLots = async () => {
@@ -75,24 +91,30 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
     }, [user.role]);
 
     const handlePlaceBid = async () => {
-        if (!selectedLot) {
-            toast.error('Select a lot to bid on');
-            return;
-        }
+        if (!selectedLot) { toast.error('Select a lot to bid on'); return; }
+        if (cooldownLeft > 0) { toast.warning(`Wait ${cooldownLeft.toFixed(1)}s before bidding again`); return; }
 
         try {
             setLoading(true);
             await placeLotBid(selectedLot.id, parseFloat(bidAmount));
             toast.success(`Bid placed on Lot ${selectedLot.lot_number}`);
             setBidAmount('');
-            // Force immediate refresh
+            setCooldownEnd(Date.now() + BID_COOLDOWN * 1000);
             const data = await getAuctionLots();
             setLots(data);
-            // Update selected lot with fresh data (keep same lot selected)
             const updated = data.find(l => l.id === selectedLotIdRef.current);
             if (updated) setSelectedLot(updated);
         } catch (err) {
-            toast.error(err.response?.data?.detail || 'Bid failed');
+            const detail = err.response?.data?.detail || '';
+            // Parse remaining seconds from cooldown error (e.g. "Bid cooldown active: 12.3s remaining")
+            if (err.response?.status === 429 && detail.includes('cooldown')) {
+                const match = detail.match(/([\d.]+)s/);
+                const secs = match ? parseFloat(match[1]) : BID_COOLDOWN;
+                setCooldownEnd(Date.now() + secs * 1000);
+                toast.warning(`Cooldown: wait ${secs.toFixed(1)}s`);
+            } else {
+                toast.error(detail || 'Bid failed');
+            }
         } finally {
             setLoading(false);
         }
@@ -398,21 +420,37 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                                             value={bidAmount}
                                             onChange={e => setBidAmount(e.target.value)}
                                             placeholder={selectedLot.base_price.toString()}
+                                            disabled={cooldownLeft > 0}
                                         />
                                         <button
                                             onClick={handlePlaceBid}
-                                            disabled={loading || !bidAmount || selectedLot.status !== 'active'}
+                                            disabled={loading || !bidAmount || selectedLot.status !== 'active' || cooldownLeft > 0}
                                             className="btn btn-primary"
                                             style={{
-                                                fontSize: '1.2rem',
-                                                padding: '0 2rem',
-                                                opacity: selectedLot.status !== 'active' ? 0.5 : 1,
-                                                cursor: selectedLot.status !== 'active' ? 'not-allowed' : 'pointer'
+                                                fontSize: cooldownLeft > 0 ? '0.9rem' : '1.2rem',
+                                                padding: '0 2rem', minWidth: '120px',
+                                                opacity: (selectedLot.status !== 'active' || cooldownLeft > 0) ? 0.6 : 1,
+                                                cursor: (selectedLot.status !== 'active' || cooldownLeft > 0) ? 'not-allowed' : 'pointer',
+                                                background: cooldownLeft > 0 ? '#6B7280' : undefined,
+                                                borderColor: cooldownLeft > 0 ? '#6B7280' : undefined,
+                                                transition: 'background 0.3s',
                                             }}
                                         >
-                                            {loading ? '...' : (selectedLot.status === 'active' ? 'BID' : selectedLot.status.toUpperCase())}
+                                            {loading ? '…' : cooldownLeft > 0 ? `⏱ ${cooldownLeft.toFixed(1)}s` : (selectedLot.status === 'active' ? 'BID' : selectedLot.status.toUpperCase())}
                                         </button>
                                     </div>
+                                    {/* Cooldown progress bar */}
+                                    {cooldownLeft > 0 && (
+                                        <div style={{ height: '4px', background: '#E5E7EB', borderRadius: '2px', marginBottom: '0.5rem', overflow: 'hidden' }}>
+                                            <div style={{
+                                                height: '100%',
+                                                width: `${(cooldownLeft / BID_COOLDOWN) * 100}%`,
+                                                background: '#D1202F',
+                                                transition: 'width 0.1s linear',
+                                                borderRadius: '2px',
+                                            }} />
+                                        </div>
+                                    )}
                                     {bidAmount && !isNaN(parseFloat(bidAmount)) && (
                                         <div style={{ fontSize: '0.78rem', color: '#374151', marginBottom: '0.75rem', padding: '0.4rem 0.6rem', background: '#F9FAFB', borderRadius: 4, border: '1px solid #E5E7EB' }}>
                                             <span style={{ color: '#6B7280' }}>Total cost: </span>

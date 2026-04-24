@@ -36,6 +36,25 @@ def _check_rate_limit(user_id: int):
         raise HTTPException(status_code=429, detail="Too many trades. Wait a minute.")
     _trade_times[user_id].append(now)
 
+# ─── Auction bid cooldown (in-memory, per user) ───────────────────────────────
+_bid_last_time: dict = {}          # {user_id: monotonic timestamp of last bid}
+BID_COOLDOWN_SECONDS = 15          # seconds a team must wait between bids
+
+def _check_bid_cooldown(user_id: int):
+    now = _time.monotonic()
+    last = _bid_last_time.get(user_id, 0)
+    elapsed = now - last
+    if elapsed < BID_COOLDOWN_SECONDS:
+        remaining = round(BID_COOLDOWN_SECONDS - elapsed, 1)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Bid cooldown active: {remaining}s remaining",
+            headers={"X-Cooldown-Remaining": str(remaining)},
+        )
+
+def _record_bid(user_id: int):
+    _bid_last_time[user_id] = _time.monotonic()
+
 # Valid asset tickers for validation
 VALID_TICKERS = {"GOLD", "NVDA", "BRENT", "REITS", "TBILL"}
 
@@ -694,6 +713,7 @@ def create_team_user(data: UserRegister, user: User = Depends(get_current_admin)
 async def place_bid(bid: BidLotCreate, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
     """Place bid on a specific auction lot"""
     _check_rate_limit(user.id)
+    _check_bid_cooldown(user.id)
     state = session.exec(select(MarketState)).first()
     if state and state.phase == "FINISHED":
         raise HTTPException(status_code=400, detail="Trading has ended")
@@ -702,14 +722,14 @@ async def place_bid(bid: BidLotCreate, user: User = Depends(get_active_user), se
 
     try:
         sim.place_bid(user, bid.lot_id, bid.amount)
-        # Get the lot to retrieve asset ticker and quantity for logging
+        _record_bid(user.id)
         from .models import AuctionLot
         lot = session.get(AuctionLot, bid.lot_id)
         quantity = lot.quantity if lot else 0
         asset_ticker = lot.asset_ticker if lot else sim.get_state().active_auction_asset
         logger.log_bid(user.id, asset_ticker, bid.lot_id, bid.amount, quantity)
         await ws_manager.broadcast("bid_placed", {"lot_id": bid.lot_id, "amount": bid.amount, "user": user.username})
-        return {"message": "Bid placed successfully"}
+        return {"message": "Bid placed successfully", "cooldown_seconds": BID_COOLDOWN_SECONDS}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
