@@ -13,11 +13,22 @@ if database_url and (database_url.startswith("postgres://") or database_url.star
     # Fix Render's postgres:// usage for SQLAlchemy (needs postgresql://)
     database_url = database_url.replace("postgres://", "postgresql://")
     engine = create_engine(
-        database_url, 
+        database_url,
         echo=False,
-        pool_size=20,
-        max_overflow=20,
-        pool_pre_ping=True,
+        # Render PostgreSQL caps at 25 connections — stay well under that limit.
+        pool_size=5,
+        max_overflow=10,        # max 15 total connections
+        pool_timeout=10,        # fail fast instead of hanging 30s
+        pool_recycle=300,       # recycle idle connections every 5 min
+        pool_pre_ping=True,     # discard stale connections before use
+        connect_args={
+            # TCP keepalives so Render's network doesn't silently drop idle conns
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
+            "connect_timeout": 10,
+        },
     )
     is_sqlite = False
 else:
@@ -29,10 +40,10 @@ else:
         sqlite_url,
         echo=False,
         connect_args=connect_args,
-        pool_size=40,          # Support 40 concurrent connections
-        max_overflow=30,       # Allow up to 50 total if needed
-        pool_pre_ping=True,    # Detect stale connections early
-        pool_timeout=10,       # Don't wait more than 10s for a slot
+        pool_size=10,
+        max_overflow=10,
+        pool_pre_ping=True,
+        pool_timeout=10,
     )
 
 
