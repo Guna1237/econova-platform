@@ -1237,89 +1237,16 @@ class TBillOrder(BaseModel):
         return v
 
 @app.post("/treasury/buy")
-async def buy_tbills(order: TBillOrder, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
-    """Buy T-Bills at current face value (risk-free, no auction)"""
-    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="T-Bill asset not found")
-    
-    total_cost = asset.current_price * order.quantity
-    if user.cash < total_cost:
-        raise HTTPException(status_code=400, detail=f"Insufficient cash. Need ${total_cost:,.2f}, have ${user.cash:,.2f}")
-    
-    # Deduct cash
-    user.cash -= total_cost
-    
-    # Add to holdings
-    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
-    if holding:
-        holding.quantity += order.quantity
-    else:
-        holding = Holding(user_id=user.id, asset_id=asset.id, quantity=order.quantity)
-    
-    session.add(user)
-    session.add(holding)
-    session.commit()
-    
-    # Log activity
-    act_logger = ActivityLogger(session)
-    act_logger.log_action(user_id=user.id, action_type="TBILL_BUY", action_details={
-        "quantity": order.quantity, "price_per_unit": asset.current_price, "total_cost": total_cost
-    })
-    
-    await ws_manager.broadcast("trade_executed", {"type": "tbill_buy", "user": user.username, "quantity": order.quantity})
-    return {"message": f"Purchased {order.quantity} T-Bills at ${asset.current_price:.2f} each", "total_cost": total_cost}
+async def buy_tbills(*args, **kwargs):
+    raise HTTPException(status_code=410, detail="T-Bill trading has been removed from this simulation")
 
 @app.post("/treasury/sell")
-async def sell_tbills(order: TBillOrder, user: User = Depends(get_active_user), session: Session = Depends(get_session)):
-    """Sell T-Bills back at current face value"""
-    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="T-Bill asset not found")
-    
-    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
-    if not holding or holding.quantity < order.quantity:
-        raise HTTPException(status_code=400, detail="Insufficient T-Bill holdings")
-    
-    total_value = asset.current_price * order.quantity
-    
-    # Credit cash, deduct holdings
-    user.cash += total_value
-    holding.quantity -= order.quantity
-    
-    session.add(user)
-    session.add(holding)
-    session.commit()
-    
-    # Log activity
-    act_logger = ActivityLogger(session)
-    act_logger.log_action(user_id=user.id, action_type="TBILL_SELL", action_details={
-        "quantity": order.quantity, "price_per_unit": asset.current_price, "total_value": total_value
-    })
-    
-    await ws_manager.broadcast("trade_executed", {"type": "tbill_sell", "user": user.username, "quantity": order.quantity})
-    return {"message": f"Sold {order.quantity} T-Bills at ${asset.current_price:.2f} each", "total_value": total_value}
+async def sell_tbills(*args, **kwargs):
+    raise HTTPException(status_code=410, detail="T-Bill trading has been removed from this simulation")
 
 @app.get("/treasury/info")
-def get_tbill_info(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    """Get T-Bill info including current price and user holdings"""
-    asset = session.exec(select(Asset).where(Asset.ticker == "TBILL")).first()
-    if not asset:
-        raise HTTPException(status_code=404, detail="T-Bill asset not found")
-    
-    holding = session.exec(select(Holding).where(Holding.user_id == user.id, Holding.asset_id == asset.id)).first()
-    
-    return {
-        "asset_id": asset.id,
-        "ticker": "TBILL",
-        "name": asset.name,
-        "current_price": asset.current_price,
-        "base_price": asset.base_price,
-        "annual_yield": asset.base_cagr * 100,
-        "description": asset.description,
-        "user_holdings": holding.quantity if holding else 0,
-        "user_holdings_value": (holding.quantity * asset.current_price) if holding else 0.0
-    }
+async def get_tbill_info(*args, **kwargs):
+    raise HTTPException(status_code=410, detail="T-Bill trading has been removed from this simulation")
 
 # --- PRIVATE TRADING ---
 
@@ -1358,6 +1285,8 @@ async def create_private_offer(
     asset = session.exec(select(Asset).where(Asset.ticker == offer.asset_ticker)).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.ticker == "TBILL":
+        raise HTTPException(status_code=400, detail="T-Bills cannot be traded on the marketplace")
 
     # If selling, check ownership (minus escrowed collateral)
     if offer.offer_type.upper() == "SELL":

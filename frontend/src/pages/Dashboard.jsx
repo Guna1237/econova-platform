@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
-    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark, Shield
+    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark
 } from 'lucide-react';
 import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital, issueDividend, setInterestRate } from '../services/api';
 import univLogo from '../assets/ip.png';
@@ -23,7 +23,6 @@ import TeamManagement from '../components/TeamManagement';
 import DataExport from '../components/DataExport';
 import PrivateTrading from '../components/PrivateTrading';
 import NewsTab from '../components/NewsTab';
-import Treasury from '../components/Treasury';
 import AdminTradeApprovals from '../components/AdminTradeApprovals';
 import AdminLoanApprovals from '../components/AdminLoanApprovals';
 import AdminLeaderboard from '../components/AdminLeaderboard';
@@ -178,7 +177,7 @@ export default function Dashboard() {
             ]);
             setUser(userData);
             setMarketState(marketData);
-            setAssets(assetsData);
+            setAssets(assetsData.filter(a => a.ticker !== 'TBILL'));
             setPortfolio(portfolioData);
 
             // Check consent status for team users
@@ -620,7 +619,6 @@ export default function Dashboard() {
         { id: 'marketplace', label: 'MARKETPLACE', icon: TrendingUp },
         { id: 'auction', label: 'AUCTION HALL', icon: Gavel },
         { id: 'secondary_mkt', label: 'SECONDARY MKT', icon: Gavel },
-        { id: 'treasury', label: 'TREASURY', icon: Shield },
         { id: 'credit', label: 'CREDIT NETWORK', icon: Landmark },
         { id: 'analysis', label: 'ANALYSIS', icon: Activity },
     ];
@@ -1171,7 +1169,7 @@ export default function Dashboard() {
                                                         </button>
                                                     ))}
                                                     <span style={{ fontSize: '0.72rem', color: '#9CA3AF', marginLeft: '0.5rem' }}>
-                                                        LOW → REITS+4%/NVDA+2% | HIGH → REITS-8%/NVDA-5%/TBILL+2%/GOLD+2%
+                                                        LOW → REITS+4%/NVDA+2% | HIGH → REITS-8%/NVDA-5%/GOLD+2%
                                                     </span>
                                                 </div>
                                             </div>
@@ -1705,10 +1703,6 @@ export default function Dashboard() {
 
                                 {activeTab === 'secondary_mkt' && (
                                     <SecondaryAuctionHall user={user} lastUpdate={lastUpdate} />
-                                )}
-
-                                {activeTab === 'treasury' && (
-                                    <Treasury user={user} onUpdate={fetchData} />
                                 )}
 
                                 {activeTab === 'credit' && (

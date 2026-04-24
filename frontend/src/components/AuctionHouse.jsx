@@ -283,10 +283,6 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
                         <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>REITS</td>
                         <td className="mono-num" style={{ padding: '0.75rem 0.5rem', color: '#4B5563' }}>3 &rarr; 5 &rarr; 8 &rarr; 10 units</td>
                     </tr>
-                    <tr>
-                        <td style={{ padding: '0.75rem 0.5rem', fontWeight: 600 }}>TBILL</td>
-                        <td style={{ padding: '0.75rem 0.5rem', color: '#6B7280' }}>Not auctioned (buy direct)</td>
-                    </tr>
                 </tbody>
             </table>
         </div>
