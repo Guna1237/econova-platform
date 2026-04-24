@@ -74,6 +74,7 @@ export default function Dashboard() {
     const audioCtxRef = useRef(null);
     const rtStatusRef = useRef('disconnected');
     const [rtStatus, setRtStatus] = useState('connecting');
+    const fetchDebounceRef = useRef(null); // Debounce SSE-triggered fetches
 
     const playNotificationSound = (type = 'standard') => {
         try {
@@ -331,10 +332,12 @@ export default function Dashboard() {
                 setNotifications(prev => ({ ...prev, [notifyTab]: true }));
             }
 
-            if (['market_update', 'bid_placed', 'auction_update', 'shock_triggered', 'trade_executed', 'news_update'].includes(msg.type)) {
-                // Jitter: spread 30 simultaneous SSE callbacks over 1.5s to prevent
-                // thundering herd (30 teams × 4 endpoints = 120 simultaneous DB hits)
-                setTimeout(fetchData, Math.random() * 1500);
+            // bid_placed and news_update don't need a full 4-endpoint refresh:
+            // auction lots poll independently every 3s; news doesn't affect portfolio/prices.
+            // For state-changing events, debounce so rapid bursts collapse into one fetch.
+            if (['market_update', 'auction_update', 'shock_triggered', 'trade_executed'].includes(msg.type)) {
+                clearTimeout(fetchDebounceRef.current);
+                fetchDebounceRef.current = setTimeout(fetchData, 300 + Math.random() * 1200);
             }
         }, (status) => {
             rtStatusRef.current = status;

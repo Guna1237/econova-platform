@@ -17,7 +17,7 @@ services:
       --port $PORT
       --workers 1
       --timeout-keep-alive 65
-      --limit-max-requests 1000
+      --limit-max-requests 10000
       --log-level warning
     healthCheckPath: /health
     envVars:
