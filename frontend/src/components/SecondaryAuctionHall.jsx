@@ -62,7 +62,7 @@ export default function SecondaryAuctionHall({ user, lastUpdate }) {
     useEffect(() => {
         fetchLots();
         fetchMyRequests();
-        const fast = setInterval(fetchLots, 2000);
+        const fast = setInterval(fetchLots, 3000);
         const slow = setInterval(fetchMyRequests, 5000);
         return () => { clearInterval(fast); clearInterval(slow); };
     }, [fetchLots, fetchMyRequests, lastUpdate]);

@@ -52,7 +52,7 @@ export default function AuctionHouse({ user, marketState, onUpdate, lastUpdate }
             };
 
             fetchLots();
-            interval = setInterval(fetchLots, 2000);
+            interval = setInterval(fetchLots, 3000);
         } else {
             // Auction ended — clear selection
             selectedLotIdRef.current = null;

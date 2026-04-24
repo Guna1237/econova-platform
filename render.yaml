@@ -2,7 +2,7 @@ databases:
   - name: econova-db
     databaseName: econova
     user: econovagame
-    plan: free               # upgrade to "starter" ($7/mo) for production persistence
+    plan: starter            # 1GB RAM, 10GB storage, 25 connections — stable for 30 teams
 
 services:
   - type: web
@@ -15,7 +15,9 @@ services:
       uvicorn backend.main:app
       --host 0.0.0.0
       --port $PORT
+      --workers 1
       --timeout-keep-alive 65
+      --limit-max-requests 1000
       --log-level warning
     healthCheckPath: /health
     envVars:
