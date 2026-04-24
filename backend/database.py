@@ -81,20 +81,29 @@ def _run_migrations():
         ("marketstate", "auto_news_config", "TEXT DEFAULT NULL"),
         # MarketState: global interest rate environment
         ("marketstate", "global_interest_rate", "TEXT NOT NULL DEFAULT 'NEUTRAL'"),
+        # User: hidden from other teams
+        ("user", "is_hidden", "INTEGER NOT NULL DEFAULT 0"),
     ]
     
-    with engine.connect() as conn:
-        for table, column, col_type in migrations:
-            try:
-                # Quote identifiers to handle reserved words like "transaction"
+    for table, column, col_type in migrations:
+        # Use a fresh connection for each check so a failed SELECT doesn't
+        # leave the connection in an invalid state for the ALTER TABLE.
+        column_exists = False
+        try:
+            with engine.connect() as conn:
                 conn.exec_driver_sql(f'SELECT "{column}" FROM "{table}" LIMIT 1')
-            except Exception:
-                try:
+                column_exists = True
+        except Exception:
+            pass
+
+        if not column_exists:
+            try:
+                # engine.begin() auto-commits on success, auto-rolls-back on error
+                with engine.begin() as conn:
                     conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {col_type}')
-                    logger.info(f"Migration: added {column} to {table}")
-                    conn.commit()
-                except Exception as e:
-                    logger.warning(f"Migration skip ({table}.{column}): {e}")
+                logger.info(f"Migration: added {column} to {table}")
+            except Exception as e:
+                logger.warning(f"Migration skip ({table}.{column}): {e}")
 
 
 def create_db_and_tables():

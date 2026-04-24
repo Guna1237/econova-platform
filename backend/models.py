@@ -71,6 +71,7 @@ class User(SQLModel, table=True):
     cash: float = Field(default=1000000.0)
     debt: float = Field(default=0.0)
     is_frozen: bool = Field(default=False)
+    is_hidden: bool = Field(default=False)  # Hidden from other teams (leaderboard, loan partners)
     
     # Research tracking
     has_consented: bool = Field(default=False)

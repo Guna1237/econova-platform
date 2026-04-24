@@ -24,6 +24,19 @@ default_api.interceptors.request.use((config) => {
     return config;
 }, (error) => Promise.reject(error));
 
+// On 401: token expired or invalid — clear and redirect to login
+default_api.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response?.status === 401 && !error.config?.url?.includes('/token')) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('role');
+            window.location.href = '/';
+        }
+        return Promise.reject(error);
+    }
+);
+
 export const login = async (username, password) => {
     const params = new URLSearchParams();
     params.append('username', username);
@@ -95,6 +108,16 @@ export const createTeamUser = async (username, password) => {
 
 export const toggleFreezeUser = async (userId) => {
     const response = await default_api.post(`/admin/users/${userId}/freeze`);
+    return response.data;
+};
+
+export const toggleHideUser = async (userId) => {
+    const response = await default_api.post(`/admin/users/${userId}/hide`);
+    return response.data;
+};
+
+export const bulkCreateTeams = async (teams) => {
+    const response = await default_api.post('/admin/teams/bulk-create', { teams });
     return response.data;
 };
 

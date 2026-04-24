@@ -276,7 +276,20 @@ export default function Dashboard() {
             }
             if (msg.type === 'market_update') {
                 const action = msg.data?.action || '';
-                if (action.includes('loan') || action.includes('mortgage')) notifyTab = 'credit';
+                if (action === 'loan_offered') {
+                    const currentUser = user?.username;
+                    const borrower = msg.data?.to;
+                    const lender = msg.data?.from;
+                    if (borrower === currentUser) {
+                        notifyTab = 'credit';
+                        playNotificationSound('standard');
+                        toast.info(`💳 Loan offer received from ${lender} — check Credit Network`, { duration: 6000 });
+                    } else if (lender === currentUser) {
+                        notifyTab = 'credit';
+                    }
+                } else if (action.includes('loan') || action.includes('mortgage')) {
+                    notifyTab = 'credit';
+                }
                 if (action === 'trade_pending_approval') {
                     notifyTab = 'admin_panel';
                     playNotificationSound('standard');

@@ -803,8 +803,13 @@ class MarketEngine:
                 self.session.add(winner)
                 self.session.add(active_lot)
                 
-                # Price impact matches max trade impact
-                asset.current_price = (0.70 * asset.current_price) + (0.30 * winner_bid.amount)
+                # Small price nudge proportional to bid premium over base price (was 30% blend)
+                if active_lot.base_price > 0:
+                    premium = max(0.0, winner_bid.amount - active_lot.base_price) / active_lot.base_price
+                    nudge = min(0.04, premium * 0.08)
+                else:
+                    nudge = 0.01
+                asset.current_price = asset.current_price * (1 + nudge)
                 self.session.add(asset)
             else:
                 active_lot.status = LotStatus.CANCELLED
@@ -914,7 +919,13 @@ class MarketEngine:
                 self.session.add(winner)
                 self.session.add(lot)
 
-                asset.current_price = (0.70 * asset.current_price) + (0.30 * winner_bid.amount)
+                # Small price nudge proportional to bid premium over base price
+                if lot.base_price > 0:
+                    premium = max(0.0, winner_bid.amount - lot.base_price) / lot.base_price
+                    nudge = min(0.04, premium * 0.08)
+                else:
+                    nudge = 0.01
+                asset.current_price = asset.current_price * (1 + nudge)
                 self.session.add(asset)
             else:
                 lot.status = LotStatus.CANCELLED

@@ -420,7 +420,7 @@ class UserRegister(BaseModel):
     username: str
     password: str
 
-@app.post("/register-simple") 
+@app.post("/register-simple")
 def register(data: UserRegister, admin: User = Depends(get_current_admin), session: Session = Depends(get_session)):
     """Create a new user (admin-only)"""
     validate_password_strength(data.password)
@@ -432,6 +432,61 @@ def register(data: UserRegister, admin: User = Depends(get_current_admin), sessi
     session.add(user)
     session.commit()
     return {"message": "User created"}
+
+
+class BulkTeamEntry(BaseModel):
+    username: str
+    password: str
+    starting_capital: Optional[float] = None
+
+class BulkTeamCreate(BaseModel):
+    teams: List[BulkTeamEntry]
+
+@app.post("/admin/teams/bulk-create")
+def bulk_create_teams(
+    data: BulkTeamCreate,
+    admin: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Bulk-create team accounts from an imported spreadsheet."""
+    state = session.exec(select(MarketState)).first()
+    default_capital = state.team_starting_capital if state else 1_000_000.0
+
+    created, skipped, errors = [], [], []
+
+    for entry in data.teams:
+        username = (entry.username or "").strip()
+        password = (entry.password or "").strip()
+        capital = entry.starting_capital if entry.starting_capital is not None else default_capital
+
+        if not username or not password:
+            errors.append({"username": username or "(empty)", "reason": "Missing username or password"})
+            continue
+        if len(username) < 2 or len(username) > 30:
+            errors.append({"username": username, "reason": "Username must be 2–30 characters"})
+            continue
+
+        existing = session.exec(select(User).where(User.username == username)).first()
+        if existing:
+            skipped.append(username)
+            continue
+
+        team = User(
+            username=username,
+            hashed_password=get_password_hash(password),
+            role=Role.TEAM,
+            cash=max(0.0, float(capital)),
+        )
+        session.add(team)
+        created.append(username)
+
+    session.commit()
+    return {
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "summary": f"{len(created)} created, {len(skipped)} skipped (already exist), {len(errors)} errors",
+    }
 
 # --- MARKET DATA ---
 # ...
@@ -482,7 +537,9 @@ def get_public_leaderboard(user: User = Depends(get_current_user), session: Sess
     if not is_privileged and (not state or not state.leaderboard_visible):
         return []
 
-    teams = session.exec(select(User).where(User.role == Role.TEAM)).all()
+    # Hidden teams are invisible to regular participants; privileged users see everyone
+    hidden_filter = [] if is_privileged else [User.is_hidden == False]
+    teams = session.exec(select(User).where(User.role == Role.TEAM, *hidden_filter)).all()
     assets = session.exec(select(Asset)).all()
     asset_map = {a.id: a for a in assets}
 
@@ -663,7 +720,7 @@ async def offer_loan(offer: LoanOfferCreate, user: User = Depends(get_active_use
     )
     session.add(loan)
     session.commit()
-    await ws_manager.broadcast("market_update", {"action": "loan_offered", "from": user.username})
+    await ws_manager.broadcast("market_update", {"action": "loan_offered", "from": user.username, "to": borrower.username})
     return {"message": "Loan offer sent"}
 
 @app.post("/loans/accept/{loan_id}")
@@ -710,7 +767,8 @@ def get_all_teams(user: User = Depends(get_current_user), session: Session = Dep
     teams = session.exec(
         select(User).where(
             User.role == Role.TEAM,
-            User.id != user.id
+            User.id != user.id,
+            User.is_hidden == False,
         )
     ).all()
     return [{"id": t.id, "username": t.username} for t in teams]
@@ -2230,6 +2288,22 @@ def freeze_user(
     
     status = "FROZEN" if target.is_frozen else "ACTIVE"
     return {"message": f"User {target.username} remains now {status}", "is_frozen": target.is_frozen}
+
+@app.post("/admin/users/{user_id}/hide")
+def toggle_hide_user(
+    user_id: int,
+    user: User = Depends(get_current_admin),
+    session: Session = Depends(get_session)
+):
+    """Toggle hidden status — hidden teams are invisible to other teams (leaderboard, loan partners)."""
+    target = session.get(User, user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.is_hidden = not target.is_hidden
+    session.add(target)
+    session.commit()
+    status = "HIDDEN" if target.is_hidden else "VISIBLE"
+    return {"message": f"User {target.username} is now {status}", "is_hidden": target.is_hidden}
 
 @app.post("/admin/users/{user_id}/liquidate")
 def liquidate_user(
