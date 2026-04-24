@@ -3870,15 +3870,19 @@ async def reset_game(user: User = Depends(get_current_admin), session: Session =
                          NewsItem, ActiveEvent, PriceHistory, ActivityLog, ConsentRecord,
                          TeamLeaderInfo, Order, SecondaryAuctionRequest)
 
+    # Delete child tables (with FKs) before parent tables — PostgreSQL enforces FK constraints
     tables_to_clear = [
-        Holding, TeamLoan, LoanApproval, AuctionLot, AuctionBid, PrivateOffer,
-        TradeApproval, Transaction, MortgageLoan, BailoutRecord, BankerRequest,
+        LoanApproval,           # FK → teamloan.id
+        AuctionBid,             # FK → auctionlot.id
+        TradeApproval,          # FK → privateoffer.id
+        Holding, TeamLoan, AuctionLot, PrivateOffer,
+        Transaction, MortgageLoan, BailoutRecord, BankerRequest,
         NewsItem, ActiveEvent, PriceHistory, ActivityLog, ConsentRecord,
         TeamLeaderInfo, Order, SecondaryAuctionRequest,
     ]
 
     for model in tables_to_clear:
-        session.exec(sql_delete(model))
+        session.exec(sql_delete(model).execution_options(synchronize_session=False))
 
     # Delete team & AI agent users
     teams_and_ai = session.exec(select(User).where((User.role == Role.TEAM) | (User.role == Role.AI_AGENT))).all()
