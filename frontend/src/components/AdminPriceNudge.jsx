@@ -38,7 +38,6 @@ export default function AdminPriceNudge() {
     const [showShockConfig, setShowShockConfig] = useState(false);
     const [shockConfig, setShockConfig] = useState({});
     const [shockDefaults, setShockDefaults] = useState({});
-    const [shockKeys, setShockKeys] = useState([]);
     const [editShockKey, setEditShockKey] = useState('');
     const [shockTemplates, setShockTemplates] = useState([]);
     const [savingShock, setSavingShock] = useState(false);
@@ -48,8 +47,9 @@ export default function AdminPriceNudge() {
     const loadAssets = async () => {
         try {
             const data = await getAssets();
-            setAssets(data);
-            if (data.length > 0) setSelectedTicker(data[0].ticker);
+            const filtered = data.filter(a => a.ticker !== 'TBILL');
+            setAssets(filtered);
+            if (filtered.length > 0) setSelectedTicker(filtered[0].ticker);
         } catch {
             toast.error('Failed to load assets');
         }
@@ -70,7 +70,6 @@ export default function AdminPriceNudge() {
             const data = await getShockNewsConfig();
             setShockConfig(data.config || {});
             setShockDefaults(data.defaults || {});
-            setShockKeys(data.shock_keys || []);
         } catch {
             toast.error('Failed to load shock news config');
         }
@@ -104,8 +103,9 @@ export default function AdminPriceNudge() {
     const openNewsEditor = (ticker) => {
         setEditTicker(ticker);
         const existing = newsConfig[ticker];
-        setUpTemplates(existing ? existing.up?.map(t => ({ ...t })) : (defaults.up?.map(t => ({ ...t })) || []));
-        setDownTemplates(existing ? existing.down?.map(t => ({ ...t })) : (defaults.down?.map(t => ({ ...t })) || []));
+        const tickerDefaults = defaults[ticker] || defaults['_default'] || {};
+        setUpTemplates(existing ? existing.up?.map(t => ({ ...t })) : (tickerDefaults.up?.map(t => ({ ...t })) || []));
+        setDownTemplates(existing ? existing.down?.map(t => ({ ...t })) : (tickerDefaults.down?.map(t => ({ ...t })) || []));
     };
 
     const handleSaveNewsConfig = async () => {
@@ -323,12 +323,12 @@ export default function AdminPriceNudge() {
                             Posted automatically when admin triggers each shock stage.
                         </p>
                         <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-                            {shockKeys.map(key => (
+                            {Object.keys(SHOCK_KEY_LABELS).map(key => (
                                 <button key={key} type="button"
                                     className={editShockKey === key ? 'btn btn-primary' : 'btn btn-secondary'}
                                     style={{ padding: '0.35rem 0.7rem', fontSize: '0.72rem', position: 'relative' }}
                                     onClick={() => openShockEditor(key)}>
-                                    {SHOCK_KEY_LABELS[key] || key}
+                                    {SHOCK_KEY_LABELS[key]}
                                     {shockConfig[key] && <span style={{ position: 'absolute', top: -4, right: -4, width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />}
                                 </button>
                             ))}

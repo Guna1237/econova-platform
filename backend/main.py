@@ -1870,18 +1870,64 @@ _DEFAULT_SHOCK_NEWS = {
     ],
 }
 
-# Default auto-news templates when admin hasn't configured custom ones
+# Default auto-news templates — per ticker, sourced from curated news library
 _DEFAULT_AUTO_NEWS = {
-    "up": [
-        {"title": "{asset_name} Surges on Strong Demand", "content": "{ticker} prices jumped {change_pct}% amid renewed investor confidence. Analysts cite robust fundamentals and favourable macro conditions driving the rally from ${old_price} to ${new_price}."},
-        {"title": "Bullish Momentum Lifts {ticker}", "content": "Strong buying pressure pushed {asset_name} up {change_pct}% today. Market observers note increased institutional interest as prices moved from ${old_price} to ${new_price}."},
-        {"title": "{ticker} Rally: Growth Outlook Improves", "content": "{asset_name} advanced {change_pct}% as positive economic indicators bolster growth expectations. The asset moved from ${old_price} to ${new_price}, outpacing sector peers."},
-    ],
-    "down": [
-        {"title": "{asset_name} Slides on Market Concerns", "content": "{ticker} fell {change_pct}% as investors weighed rising uncertainty. The decline from ${old_price} to ${new_price} reflects growing caution across markets."},
-        {"title": "Selloff Hits {ticker} Amid Headwinds", "content": "{asset_name} dropped {change_pct}% under pressure from adverse market conditions. Prices retreated from ${old_price} to ${new_price} on elevated selling volume."},
-        {"title": "{ticker} Under Pressure: Analysts Flag Risks", "content": "Mounting concerns sent {asset_name} down {change_pct}% today. The move from ${old_price} to ${new_price} has traders watching key support levels closely."},
-    ],
+    "GOLD": {
+        "up": [
+            {"title": "Central Banks Continue Gradual Gold Accumulation", "content": "Recent data indicates that central banks across emerging economies have continued to add modest amounts of gold to their reserves as part of long-term diversification strategies. The pace of accumulation remains steady rather than aggressive, reflecting sustained institutional confidence in gold as a reserve asset. Analysts suggest this gradual buying provides a stable demand floor but is unlikely to trigger sharp price movements in the short term.", "source": "World Gold Council", "image_url": "https://www.gold.org/sites/default/files/styles/sbk_3_2/public/2023-10/shutterstock_668787001-v1.jpg.webp?itok=AVWrGj82"},
+            {"title": "Global Economic Uncertainty Drives Safe-Haven Demand for Gold", "content": "Amid rising geopolitical tensions and slowing global growth forecasts, investors are increasingly shifting capital toward safe-haven assets. Gold has seen a noticeable uptick in institutional inflows, with hedge funds and asset managers reallocating portfolios to reduce exposure to equities. This renewed demand is expected to support upward price momentum in the near to medium term.", "source": "Bloomberg", "image_url": "https://img.etimg.com/thumb/msid-125149466,width-210,height-158,imgsize-67610,resizemode-75/gold.jpg"},
+            {"title": "Major Currency Crisis Triggers Global Rush Toward Gold", "content": "A sharp devaluation in a major global currency has triggered widespread panic across financial markets, leading to a surge in demand for gold. Institutional investors, sovereign funds, and retail participants are rapidly moving capital into gold as a store of value. Spot prices have spiked significantly, with analysts warning of sustained upward pressure as trust in fiat systems weakens.", "source": "Reuters", "image_url": "https://www.reuters.com/resizer/v2/MAPY2T7JUNMORIL3OMXI43D7CQ.jpg?auth=a789765eaf8e1926cbe635f05f73ecf65fdbf91011b7f9093d52b14d295211bb&width=640&quality=80"},
+        ],
+        "down": [
+            {"title": "Strengthening Dollar Puts Mild Pressure on Gold Prices", "content": "The U.S. dollar has shown modest strengthening following positive economic indicators, leading to slight downward pressure on gold prices. Since gold is typically inversely correlated with the dollar, the appreciation has made it slightly less attractive to international investors. Analysts note that the impact remains limited in scope for now.", "source": "Bloomberg", "image_url": "https://s.yimg.com/ny/api/res/1.2/AXoMivLkaMIzrtRm953TPA--/YXBwaWQ9aGlnaGxhbmRlcjt3PTk2MDtoPTU0MDtjZj13ZWJw/https://media.zenfs.com/en/cnn_business_articles_218/18e9377d265cba8144983e8f02084121"},
+            {"title": "Rising Interest Rates Reduce Appeal of Non-Yielding Assets", "content": "Central banks have signalled a continuation of higher interest rate policies to combat inflation, increasing the attractiveness of yield-bearing assets such as bonds. As a result, gold, which does not generate income, is seeing reduced investment inflows. Market participants are gradually reallocating capital away from gold, creating downward pressure on prices.", "source": "Financial Times", "image_url": "https://img.etimg.com/thumb/msid-129743769,width-210,height-158,imgsize-2271216,resizemode-75/gold-extends-fall-after-worst-week-in-43-years-more-pain-or-time-to-buy-the-dip.jpg"},
+            {"title": "Global Liquidation Wave Hits Gold as Investors Shift to Equities", "content": "A strong global equity rally, driven by technological breakthroughs and improved economic outlooks, has led to a large-scale liquidation of gold holdings. Institutional investors are aggressively moving funds into higher-return assets, triggering a sharp decline in gold prices. Analysts warn that continued outflows could significantly weaken gold's position as a preferred investment.", "source": "CNBC", "image_url": "https://alexlexington.com/cdn/shop/articles/674f2b99-f5c6-46d6-a5f4-3505c7235af0.png?v=1773939159&width=1600"},
+        ],
+    },
+    "NVDA": {
+        "up": [
+            {"title": "Steady AI Demand Continues to Support Nvidia Revenues", "content": "Nvidia continues to see stable demand for its AI-focused GPUs across enterprise and cloud customers. While growth has normalized compared to previous quarters, consistent adoption of AI infrastructure by companies ensures a steady revenue stream. Analysts believe this sustained demand reinforces Nvidia's strong market position without causing sharp valuation spikes in the short term.", "source": "Bloomberg", "image_url": "https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iJL1uNW1v2Fc/v0/1200x800.webp"},
+            {"title": "Cloud Giants Increase AI Spending, Boosting Nvidia Outlook", "content": "Major cloud providers including Microsoft, Amazon, and Google have announced increased capital expenditure toward AI infrastructure, significantly benefiting Nvidia's GPU business. With demand for high-performance chips rising, analysts expect Nvidia's revenue growth to accelerate over the coming quarters. This renewed optimism is likely to strengthen investor sentiment and drive upward momentum in Nvidia-linked assets.", "source": "Reuters", "image_url": "https://images.indianexpress.com/2024/05/Untitled-design-2024-05-14T133654.752.jpg?w=1600"},
+            {"title": "Breakthrough AI Chip Launch Sends Nvidia Shares Soaring", "content": "Nvidia has unveiled a next-generation AI chip with significantly higher performance and energy efficiency, setting a new industry benchmark. The announcement has triggered a surge in investor confidence, with expectations of long-term dominance in the AI hardware market. Institutional investors are rapidly increasing exposure, leading to a sharp rally in Nvidia-linked securities.", "source": "CNBC", "image_url": "https://img.etimg.com/thumb/width-650,height-488,imgsize-136936,resizemode-75,msid-120192381/tech/artificial-intelligence/indian-startup-unveils-system-to-run-ai-without-advanced-chips.jpg"},
+        ],
+        "down": [
+            {"title": "Short-Term Profit Booking Seen in Nvidia Shares", "content": "After a sustained rally, investors have begun booking profits in Nvidia shares, leading to mild downward pressure. Market analysts view this as a healthy correction rather than a shift in fundamentals. While the long-term outlook remains strong, short-term volatility is expected to persist.", "source": "MarketWatch", "image_url": "https://img.etimg.com/thumb/msid-125589622,width-300,height-225,imgsize-48332,resizemode-75/.jpg"},
+            {"title": "Regulatory Scrutiny on AI Chips Raises Concerns for Nvidia", "content": "Governments are increasingly examining the export and usage of advanced AI chips, particularly in sensitive regions. Potential restrictions on chip exports could impact Nvidia's international revenue streams. Investors are reacting cautiously, leading to moderate declines in Nvidia-linked assets as regulatory uncertainty grows.", "source": "Financial Times", "image_url": "https://static.toiimg.com/thumb/msid-111555619,imgsize-1403844,width-400,resizemode-4/nvidia.jpg"},
+            {"title": "Global Tech Selloff Hits Nvidia Amid AI Bubble Fears", "content": "A widespread selloff in technology stocks has triggered a sharp decline in Nvidia's valuation, as investors question the sustainability of the AI-driven rally. Concerns over overvaluation and slowing demand have led to aggressive institutional exits. Analysts warn that if sentiment continues to weaken, Nvidia could face significant downside pressure in the near term.", "source": "Reuters", "image_url": "https://ddnews.gov.in/wp-content/uploads/2026/01/GettyImages-1403956998-1980x1320.jpg"},
+        ],
+    },
+    "BRENT": {
+        "up": [
+            {"title": "OPEC Signals Continued Production Discipline", "content": "OPEC members have reaffirmed their commitment to maintaining current production levels, signalling continued discipline in managing global oil supply. No immediate cuts have been announced, but the cautious stance has helped stabilize prices by preventing oversupply concerns. Analysts expect limited upward movement as markets had largely anticipated this decision.", "source": "Reuters", "image_url": "https://www.phcppros.com/ext/resources/2022/02/28/TW0322_rising-oilproduction.webp?t=1646055478&width=800"},
+            {"title": "Global Demand for Oil Rises Amid Economic Recovery", "content": "Stronger than expected economic activity across major economies has led to a noticeable increase in global oil demand. Industrial production, transportation, and energy consumption have all picked up pace, tightening supply and demand balances. This demand-side pressure is expected to support sustained upward movement in crude oil prices.", "source": "Bloomberg", "image_url": "https://img.etimg.com/thumb/msid-121188374,width-300,height-225,imgsize-282210,resizemode-75/opec-sees-indias-oil-demand-rising-3-4-in-2025-double-the-pace-ofchina.jpg"},
+            {"title": "Major Supply Disruption Sends Oil Prices Surging", "content": "A geopolitical conflict in a key oil-producing region has severely disrupted crude supply chains, removing a significant portion of global output from the market. Shipping routes have been affected and production facilities have been forced to halt operations. The sudden supply shock has triggered panic buying, pushing oil prices sharply higher.", "source": "CNBC", "image_url": "https://images.financialexpressdigital.com/2026/03/india-russia-us-crude-oilimports-tariff-shift-in2026_20260209054514_20260217162316_20260217175627_20260220095516_20260228181256_20260307165020_20260311175257_20260313131421.png?w=1600"},
+        ],
+        "down": [
+            {"title": "Inventory Build Signals Temporary Oversupply", "content": "Recent data shows a modest increase in crude oil inventories, indicating a temporary mismatch between supply and demand. While the rise is not significant enough to signal long-term imbalance, it has introduced mild downward pressure on prices in the short term.", "source": "U.S. Energy Information Administration (EIA)", "image_url": "https://ei.marketwatch.com/Multimedia/2020/04/20/Photos/ZH/MWIE804_crude__20200420151256_ZH.jpg?uuid=f16096b8-833a-11ea-8196-9c8e992d421e"},
+            {"title": "Renewable Energy Expansion Reduces Oil Demand Outlook", "content": "Accelerated investment in renewable energy infrastructure is beginning to impact long-term oil demand projections. Governments and corporations are shifting toward cleaner energy sources, reducing reliance on fossil fuels. This structural shift has led to a moderate decline in investor sentiment toward crude oil markets.", "source": "Financial Times", "image_url": "https://www.destinyconnect.com/wp-content/uploads/2020/04/oil-prices-min-1140x694.jpg"},
+            {"title": "Global Recession Fears Trigger Oil Price Collapse", "content": "Mounting concerns over a global economic slowdown have led to expectations of sharply reduced energy demand. Industrial activity, transportation, and manufacturing are projected to decline significantly, resulting in a steep drop in oil consumption. Markets have reacted aggressively, leading to a sharp fall in crude prices.", "source": "Reuters", "image_url": "https://www.reuters.com/resizer/v2/OIL-PRICECRASH.jpg?width=640&quality=80"},
+        ],
+    },
+    "REITS": {
+        "up": [
+            {"title": "Stable Rental Yields Support REIT Performance", "content": "Recent reports indicate that commercial and residential rental yields have remained stable across major markets. Consistent occupancy rates and steady income streams continue to support REIT valuations. While no significant growth catalysts have emerged, the stability in earnings reinforces investor confidence in REITs as a dependable income-generating asset.", "source": "Bloomberg", "image_url": "https://hivisiondevelopers.com/wp-content/uploads/2025/02/highvision-1.jpeg"},
+            {"title": "Interest Rate Cuts Boost Real Estate Investment Sentiment", "content": "Central banks have signalled a shift toward easing monetary policy, with potential interest rate cuts expected in the near term. Lower borrowing costs improve financing conditions for real estate developers and increase the attractiveness of REITs as yield-generating investments. This has led to renewed investor interest and moderate upward movement in REIT valuations.", "source": "Financial Times", "image_url": "https://sortis.com/wp-content/uploads/2024/08/Insights-from-sortis-image-1-1024x468.jpeg"},
+            {"title": "Global Real Estate Boom Drives Surge in REIT Valuations", "content": "A strong recovery in global real estate markets, driven by economic expansion and increased urban demand, has led to a significant rise in property valuations. Institutional investors are increasing allocations to REITs to capitalise on rising rental incomes and asset appreciation. This surge in demand has triggered a sharp increase in REIT index performance.", "source": "Reuters", "image_url": "https://img.etimg.com/thumb/msid-123830559,width-300,height-225,imgsize-76992,resizemode-75/manufacturing-push-drives-record-leasing-in-indias-industrial-real-estate.jpg"},
+        ],
+        "down": [
+            {"title": "Slight Vacancy Increase Raises Mild Concerns", "content": "A marginal increase in vacancy rates across select commercial properties has raised minor concerns among investors. While the overall occupancy levels remain healthy, the slight uptick suggests potential softening in demand. Analysts believe the impact will remain limited unless the trend accelerates.", "source": "MarketWatch", "image_url": "https://www.360propguide.com/storage/blogs/360_prop_guide_OvtdVABQu8_1.png"},
+            {"title": "Rising Interest Rates Pressure REIT Valuations", "content": "Central banks have continued to maintain elevated interest rates, increasing borrowing costs for real estate financing. Higher yields from fixed-income instruments are also drawing investors away from REITs. This dual pressure has led to a noticeable decline in REIT prices as capital shifts to safer, yield-generating alternatives.", "source": "Bloomberg", "image_url": "https://imageio.forbes.com/specials-images/imageserve/6605b5cd1ed4b42cf4c953dd/Housing-Crisis/0x0.jpg?width=960&dpr=1"},
+            {"title": "Commercial Real Estate Crisis Triggers Sharp REIT Selloff", "content": "A sharp downturn in commercial real estate markets, driven by declining office demand and rising defaults, has triggered a significant selloff in REITs. Large institutional investors are exiting positions amid fears of prolonged weakness in the sector. The crisis has severely impacted investor confidence, leading to a steep decline in REIT valuations.", "source": "CNBC", "image_url": "https://news.utexas.edu/wp-content/uploads/2020/07/iStock-642690564-copy1200x800-c-default.jpg"},
+        ],
+    },
+    "_default": {
+        "up": [
+            {"title": "{asset_name} Climbs on Positive Market Activity", "content": "{ticker} gained {change_pct}% as buying pressure picked up across the session. Prices moved from ${old_price} to ${new_price} on the back of improved investor confidence and supportive macro conditions."},
+        ],
+        "down": [
+            {"title": "{asset_name} Pulls Back Amid Cautious Sentiment", "content": "{ticker} slipped {change_pct}% as sellers gained the upper hand during the session. Prices moved from ${old_price} to ${new_price} as participants reassessed near-term risk and trimmed exposure."},
+        ],
+    },
 }
 
 @app.post("/admin/price/nudge")
@@ -1916,17 +1962,18 @@ async def nudge_asset_price(
             asset = session.exec(select(Asset).where(Asset.ticker == nudge.ticker)).first()
             asset_name = asset.name if asset else nudge.ticker
 
+            news_source = "Market Wire"
+            news_image = None
             if nudge.news_title and nudge.news_content:
-                # Admin supplied custom text — use it directly
                 title = nudge.news_title
                 content = nudge.news_content
             else:
-                # Pick from templates: custom per-ticker → custom default → built-in default
                 direction = "up" if change_pct > 0 else "down"
                 custom_config = (state.auto_news_config or {}) if state else {}
                 ticker_templates = custom_config.get(nudge.ticker, {}).get(direction)
                 default_templates = custom_config.get("_default", {}).get(direction)
-                templates = ticker_templates or default_templates or _DEFAULT_AUTO_NEWS[direction]
+                builtin = (_DEFAULT_AUTO_NEWS.get(nudge.ticker) or _DEFAULT_AUTO_NEWS.get("_default") or {}).get(direction, [])
+                templates = ticker_templates or default_templates or builtin
                 template = random.choice(templates)
                 fmt = {
                     "ticker": nudge.ticker,
@@ -1937,12 +1984,15 @@ async def nudge_asset_price(
                 }
                 title = template["title"].format(**fmt)
                 content = template["content"].format(**fmt)
+                news_source = template.get("source", "Market Wire")
+                news_image = template.get("image_url")
 
             news_item = NewsItem(
                 title=title,
                 content=content,
                 is_published=True,
-                source="Market Wire",
+                source=news_source,
+                image_url=news_image,
                 published_at=datetime.now(timezone.utc),
                 sim_year=state.current_year if state else None,
                 sim_quarter=state.current_quarter if state else None,
