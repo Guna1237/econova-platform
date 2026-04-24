@@ -141,6 +141,8 @@ class NewsCreate(BaseModel):
     is_published: bool = False
     image_url: Optional[str] = None
     source: str = "Global News Network"
+    sim_year: Optional[int] = None
+    sim_quarter: Optional[int] = None
 
 class BidLotCreate(BaseModel):
     lot_id: int
@@ -157,6 +159,9 @@ class PriceNudge(BaseModel):
     ticker: str
     adjustment_pct: Optional[float] = None
     adjustment_abs: Optional[float] = None
+    skip_news: bool = False
+    news_title: Optional[str] = None   # override auto-template
+    news_content: Optional[str] = None # override auto-template
     
     @field_validator('ticker')
     @classmethod
@@ -1724,7 +1729,32 @@ async def trigger_shock(shock: ShockTrigger, user: User = Depends(get_current_ad
     logger = ActivityLogger(session)
     sim.trigger_shock(shock.type, shock.action)
     logger.log_action(user_id=user.id, action_type="ADMIN_TRIGGER_SHOCK", action_details={"type": shock.type, "action": shock.action})
+
+    # Auto-generate shock news from configured or default templates
+    state = session.exec(select(MarketState)).first()
+    shock_key = f"{shock.type}_{shock.action}"
+    custom_cfg = (state.auto_news_config or {}) if state else {}
+    shock_templates = custom_cfg.get(f"_shock_{shock_key}") or _DEFAULT_SHOCK_NEWS.get(shock_key)
+    shock_news_title = None
+    if shock_templates:
+        tmpl = random.choice(shock_templates)
+        shock_news_item = NewsItem(
+            title=tmpl["title"],
+            content=tmpl["content"],
+            is_published=True,
+            source="Economic Intelligence Unit",
+            published_at=datetime.now(timezone.utc),
+            sim_year=state.current_year if state else None,
+            sim_quarter=state.current_quarter if state else None,
+            category="shock",
+        )
+        session.add(shock_news_item)
+        session.commit()
+        shock_news_title = tmpl["title"]
+
     await ws_manager.broadcast("shock_triggered", {"type": shock.type, "action": shock.action})
+    if shock_news_title:
+        await ws_manager.broadcast("news_update", {"title": shock_news_title})
     return {"message": f"Shock {shock.action} triggered for {shock.type}"}
 
 @app.post("/admin/auction/open/{ticker}")
@@ -1876,6 +1906,41 @@ def get_lot_bids(lot_id: int, user: User = Depends(get_current_user), session: S
 
 # --- ADMIN PRICE NUDGE ---
 
+# Default shock-event news templates (used by trigger_shock; overridable via auto_news_config._shock_*)
+_DEFAULT_SHOCK_NEWS = {
+    "INFLATION_HINT": [
+        {"title": "Rising Costs Signal Inflationary Pressure", "content": "Supply chain data and producer price indices are showing early signs of cost-push inflation. Analysts recommend reviewing portfolio exposure to inflation-sensitive assets."},
+        {"title": "Economic Indicators Flash Caution", "content": "Commodity prices and wage growth data suggest inflation may be building. Market participants are advised to monitor central bank commentary closely."},
+    ],
+    "INFLATION_WARNING": [
+        {"title": "Central Bank Issues Inflation Alert", "content": "Official warnings issued as CPI metrics exceed targets. Rate-sensitive assets face headwinds as monetary tightening becomes more likely."},
+        {"title": "Inflation Data Prompts Policy Review", "content": "Surging inflation figures have triggered a formal economic review. Investors are rotating out of growth assets and into inflation hedges."},
+    ],
+    "INFLATION_CRASH": [
+        {"title": "Inflation Shock Hits Markets Hard", "content": "Runaway inflation has triggered a broad market selloff. Central banks are signalling aggressive rate hikes, putting pressure on equities and real estate."},
+        {"title": "Hyperinflation Risk Spooks Investors", "content": "Inflation metrics have blown past all forecasts. Emergency policy meetings are being called as asset values across most classes come under severe pressure."},
+    ],
+    "RECESSION_HINT": [
+        {"title": "Growth Slowdown Signals Emerge", "content": "Leading economic indicators are turning negative, with slowing consumer spending and weakening industrial output flagging potential recession risk ahead."},
+        {"title": "Yield Curve Inversion Raises Alarm Bells", "content": "Closely watched recession indicators are flashing warning signals. Economists are revising growth forecasts downward as credit conditions tighten."},
+    ],
+    "RECESSION_WARNING": [
+        {"title": "Recession Risk Elevated — Analysts Warn", "content": "GDP growth projections have been cut significantly. Unemployment is ticking up and corporate earnings outlooks are deteriorating, prompting defensive repositioning."},
+        {"title": "Economic Contraction Fears Mount", "content": "Two consecutive quarters of negative leading indicators have triggered recession warnings from major forecasters. Risk assets are under pressure."},
+    ],
+    "RECESSION_CRASH": [
+        {"title": "Recession Confirmed — Markets in Freefall", "content": "Official recession declaration has triggered panic selling across asset classes. Credit markets are seizing up and emergency policy measures are under discussion."},
+        {"title": "Market Crash: Recession Deepens", "content": "Cascading losses across equities, real estate, and commodities signal the recession has taken hold. Capital preservation is now the primary concern for most participants."},
+    ],
+    "INFLATION_RECOVERY": [
+        {"title": "Inflation Easing — Recovery Signals Emerge", "content": "Cooling inflation data and stabilising supply chains are lifting market sentiment. Rate cut expectations are building, supporting equity and real estate markets."},
+    ],
+    "RECESSION_RECOVERY": [
+        {"title": "Recovery Phase Begins as Economy Stabilises", "content": "Early indicators suggest the recession trough has passed. Stimulus measures are gaining traction and consumer confidence is starting to rebound."},
+        {"title": "Green Shoots: Economy Turns the Corner", "content": "Employment data and purchasing manager indices point to a turning point. Risk appetite is cautiously returning as recessionary pressures ease."},
+    ],
+}
+
 # Default auto-news templates when admin hasn't configured custom ones
 _DEFAULT_AUTO_NEWS = {
     "up": [
@@ -1917,21 +1982,22 @@ async def nudge_asset_price(
 
         # --- Auto-news generation ---
         change_pct = result.get("change_pct", 0)
-        if abs(change_pct) >= 0.5:  # Only generate news for moves >= 0.5%
+        if not nudge.skip_news and abs(change_pct) >= 0.5:
             state = session.exec(select(MarketState)).first()
             asset = session.exec(select(Asset).where(Asset.ticker == nudge.ticker)).first()
             asset_name = asset.name if asset else nudge.ticker
 
-            # Determine direction
-            direction = "up" if change_pct > 0 else "down"
-
-            # Get templates: custom per-ticker first, then custom defaults, then built-in defaults
-            custom_config = (state.auto_news_config or {}) if state else {}
-            ticker_templates = custom_config.get(nudge.ticker, {}).get(direction)
-            default_templates = custom_config.get("_default", {}).get(direction)
-            templates = ticker_templates or default_templates or _DEFAULT_AUTO_NEWS[direction]
-
-            if templates:
+            if nudge.news_title and nudge.news_content:
+                # Admin supplied custom text — use it directly
+                title = nudge.news_title
+                content = nudge.news_content
+            else:
+                # Pick from templates: custom per-ticker → custom default → built-in default
+                direction = "up" if change_pct > 0 else "down"
+                custom_config = (state.auto_news_config or {}) if state else {}
+                ticker_templates = custom_config.get(nudge.ticker, {}).get(direction)
+                default_templates = custom_config.get("_default", {}).get(direction)
+                templates = ticker_templates or default_templates or _DEFAULT_AUTO_NEWS[direction]
                 template = random.choice(templates)
                 fmt = {
                     "ticker": nudge.ticker,
@@ -1943,21 +2009,21 @@ async def nudge_asset_price(
                 title = template["title"].format(**fmt)
                 content = template["content"].format(**fmt)
 
-                news_item = NewsItem(
-                    title=title,
-                    content=content,
-                    is_published=True,
-                    source="Market Wire",
-                    published_at=datetime.now(timezone.utc),
-                    sim_year=state.current_year if state else None,
-                    sim_quarter=state.current_quarter if state else None,
-                    category="market",
-                )
-                session.add(news_item)
-                session.commit()
+            news_item = NewsItem(
+                title=title,
+                content=content,
+                is_published=True,
+                source="Market Wire",
+                published_at=datetime.now(timezone.utc),
+                sim_year=state.current_year if state else None,
+                sim_quarter=state.current_quarter if state else None,
+                category="market",
+            )
+            session.add(news_item)
+            session.commit()
 
-                await ws_manager.broadcast("news_update", {"title": title})
-                result["auto_news"] = title
+            await ws_manager.broadcast("news_update", {"title": title})
+            result["auto_news"] = title
 
         return result
     except ValueError as e:
@@ -2018,6 +2084,55 @@ def delete_auto_news_config(ticker: str, user: User = Depends(get_current_admin)
     return {"message": f"Auto-news templates removed for {ticker}. Using defaults."}
 
 
+# --- SHOCK NEWS CONFIG ---
+
+class ShockNewsConfigBody(BaseModel):
+    shock_key: str  # e.g. "INFLATION_HINT", "RECESSION_WARNING"
+    templates: list[dict]  # [{title, content}]
+
+@app.get("/admin/shock-news/config")
+def get_shock_news_config(user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Get shock-event news templates (custom overrides + built-in defaults)"""
+    state = session.exec(select(MarketState)).first()
+    custom_cfg = (state.auto_news_config or {}) if state else {}
+    custom_shock = {k[len("_shock_"):]: v for k, v in custom_cfg.items() if k.startswith("_shock_")}
+    return {
+        "config": custom_shock,
+        "defaults": _DEFAULT_SHOCK_NEWS,
+        "shock_keys": list(_DEFAULT_SHOCK_NEWS.keys()),
+    }
+
+@app.post("/admin/shock-news/config")
+def set_shock_news_config(body: ShockNewsConfigBody, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Save custom shock-event news templates for a given shock stage"""
+    if body.shock_key not in _DEFAULT_SHOCK_NEWS:
+        raise HTTPException(status_code=400, detail=f"Unknown shock key: {body.shock_key}")
+    state = session.exec(select(MarketState)).first()
+    if not state:
+        raise HTTPException(status_code=404, detail="MarketState not found")
+    config = dict(state.auto_news_config or {})
+    config[f"_shock_{body.shock_key}"] = [{"title": t["title"], "content": t["content"]} for t in body.templates]
+    state.auto_news_config = config
+    session.add(state)
+    session.commit()
+    return {"message": f"Shock news templates saved for {body.shock_key}"}
+
+@app.delete("/admin/shock-news/config/{shock_key}")
+def delete_shock_news_config(shock_key: str, user: User = Depends(get_current_admin), session: Session = Depends(get_session)):
+    """Remove custom shock templates — reverts to built-in defaults"""
+    state = session.exec(select(MarketState)).first()
+    if not state or not state.auto_news_config:
+        raise HTTPException(status_code=404, detail="No config found")
+    config = dict(state.auto_news_config)
+    key = f"_shock_{shock_key}"
+    if key in config:
+        del config[key]
+        state.auto_news_config = config if config else None
+        session.add(state)
+        session.commit()
+    return {"message": f"Shock news templates reset to defaults for {shock_key}"}
+
+
 # --- ADMIN CREDENTIALS ---
 
 @app.post("/admin/credentials/update")
@@ -2062,13 +2177,17 @@ async def create_news(
     session: Session = Depends(get_session)
 ):
     try:
+        state = session.exec(select(MarketState)).first()
         item = NewsItem(
             title=news.title,
             content=news.content,
             is_published=news.is_published,
             image_url=news.image_url,
             source=news.source,
-            published_at=datetime.now(timezone.utc)
+            published_at=datetime.now(timezone.utc),
+            sim_year=news.sim_year if news.sim_year is not None else (state.current_year if state else None),
+            sim_quarter=news.sim_quarter if news.sim_quarter is not None else (state.current_quarter if state else None),
+            category="manual",
         )
         session.add(item)
         session.commit()

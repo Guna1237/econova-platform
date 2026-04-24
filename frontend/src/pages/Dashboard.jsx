@@ -1716,7 +1716,7 @@ export default function Dashboard() {
                                 )}
 
                                 {activeTab === 'news' && (
-                                    <NewsTab user={user} />
+                                    <NewsTab user={user} marketState={marketState} />
                                 )}
 
                                 {activeTab === 'analysis' && (

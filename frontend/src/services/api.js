@@ -296,11 +296,15 @@ export const sellTBills = async (quantity) => {
 };
 
 // --- ADMIN PRICE NUDGE ---
-export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs) => {
+// newsMode: 'auto' | 'custom' | 'skip'
+export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs, newsMode = 'auto', newsTitle = null, newsContent = null) => {
     const response = await default_api.post('/admin/price/nudge', {
         ticker,
         adjustment_pct: adjustmentPct,
-        adjustment_abs: adjustmentAbs
+        adjustment_abs: adjustmentAbs,
+        skip_news: newsMode === 'skip',
+        news_title: newsMode === 'custom' ? newsTitle : null,
+        news_content: newsMode === 'custom' ? newsContent : null,
     });
     return response.data;
 };
@@ -316,6 +320,20 @@ export const setAutoNewsConfig = async (ticker, up, down) => {
 };
 export const deleteAutoNewsConfig = async (ticker) => {
     const response = await default_api.delete(`/admin/auto-news/config/${ticker}`);
+    return response.data;
+};
+
+// --- SHOCK NEWS CONFIG ---
+export const getShockNewsConfig = async () => {
+    const response = await default_api.get('/admin/shock-news/config');
+    return response.data;
+};
+export const setShockNewsConfig = async (shockKey, templates) => {
+    const response = await default_api.post('/admin/shock-news/config', { shock_key: shockKey, templates });
+    return response.data;
+};
+export const deleteShockNewsConfig = async (shockKey) => {
+    const response = await default_api.delete(`/admin/shock-news/config/${shockKey}`);
     return response.data;
 };
 
