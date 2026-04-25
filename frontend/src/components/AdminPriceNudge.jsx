@@ -129,7 +129,7 @@ export default function AdminPriceNudge() {
         } catch { toast.error('Failed to remove config'); }
     };
 
-    const addTemplate = (setter, arr) => setter([...arr, { title: '', content: '' }]);
+    const addTemplate = (setter, arr) => setter([...arr, { title: '', content: '', source: '', image_url: '' }]);
     const removeTemplate = (setter, arr, i) => { const a = [...arr]; a.splice(i, 1); setter(a); };
     const updateTemplate = (setter, arr, i, field, val) => { const a = [...arr]; a[i] = { ...a[i], [field]: val }; setter(a); };
 
@@ -294,7 +294,13 @@ export default function AdminPriceNudge() {
                                                     style={{ marginBottom: '0.3rem', fontSize: '0.8rem' }} />
                                                 <textarea className="input-field" placeholder="Content template" value={t.content}
                                                     onChange={e => updateTemplate(setter, arr, i, 'content', e.target.value)}
-                                                    rows={2} style={{ fontSize: '0.75rem', resize: 'vertical' }} />
+                                                    rows={2} style={{ fontSize: '0.75rem', resize: 'vertical', marginBottom: '0.3rem' }} />
+                                                <input type="text" className="input-field" placeholder="Source (e.g. Reuters)" value={t.source || ''}
+                                                    onChange={e => updateTemplate(setter, arr, i, 'source', e.target.value)}
+                                                    style={{ marginBottom: '0.3rem', fontSize: '0.75rem' }} />
+                                                <input type="text" className="input-field" placeholder="Image URL (optional)" value={t.image_url || ''}
+                                                    onChange={e => updateTemplate(setter, arr, i, 'image_url', e.target.value)}
+                                                    style={{ fontSize: '0.75rem' }} />
                                             </div>
                                         ))}
                                         {arr.length === 0 && <p style={{ fontSize: '0.75rem', color: '#999' }}>No templates — using built-in defaults</p>}
@@ -345,7 +351,7 @@ export default function AdminPriceNudge() {
                                 </div>
                                 <div className="flex-between" style={{ marginBottom: '0.5rem' }}>
                                     <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#b45309' }}>TEMPLATES (one picked at random)</span>
-                                    <button type="button" onClick={() => setShockTemplates([...shockTemplates, { title: '', content: '' }])}
+                                    <button type="button" onClick={() => setShockTemplates([...shockTemplates, { title: '', content: '', source: '', image_url: '' }])}
                                         style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 3, cursor: 'pointer' }}>+ ADD</button>
                                 </div>
                                 {shockTemplates.map((t, i) => (
@@ -357,7 +363,13 @@ export default function AdminPriceNudge() {
                                             style={{ marginBottom: '0.3rem', fontSize: '0.8rem' }} />
                                         <textarea className="input-field" placeholder="News body" value={t.content}
                                             onChange={e => { const a = [...shockTemplates]; a[i] = { ...a[i], content: e.target.value }; setShockTemplates(a); }}
-                                            rows={2} style={{ fontSize: '0.75rem', resize: 'vertical' }} />
+                                            rows={2} style={{ fontSize: '0.75rem', resize: 'vertical', marginBottom: '0.3rem' }} />
+                                        <input type="text" className="input-field" placeholder="Source (e.g. Reuters)" value={t.source || ''}
+                                            onChange={e => { const a = [...shockTemplates]; a[i] = { ...a[i], source: e.target.value }; setShockTemplates(a); }}
+                                            style={{ marginBottom: '0.3rem', fontSize: '0.75rem' }} />
+                                        <input type="text" className="input-field" placeholder="Image URL (optional)" value={t.image_url || ''}
+                                            onChange={e => { const a = [...shockTemplates]; a[i] = { ...a[i], image_url: e.target.value }; setShockTemplates(a); }}
+                                            style={{ fontSize: '0.75rem' }} />
                                     </div>
                                 ))}
                                 {shockTemplates.length === 0 && <p style={{ fontSize: '0.75rem', color: '#999' }}>No templates — using built-in defaults</p>}

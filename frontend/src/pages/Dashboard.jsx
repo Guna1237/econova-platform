@@ -36,7 +36,8 @@ import { Toaster, toast } from 'sonner';
 export default function Dashboard() {
     const [user, setUser] = useState(null);
     const [marketState, setMarketState] = useState(null);
-    const [assets, setAssets] = useState([]);
+    const [assets, setAssets] = useState([]);       // trading assets — TBILL excluded
+    const [allAssets, setAllAssets] = useState([]); // all assets including TBILL — for analysis
     const [portfolio, setPortfolio] = useState([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('portfolio');
@@ -177,6 +178,7 @@ export default function Dashboard() {
             ]);
             setUser(userData);
             setMarketState(marketData);
+            setAllAssets(assetsData);
             setAssets(assetsData.filter(a => a.ticker !== 'TBILL'));
             setPortfolio(portfolioData);
 
@@ -1723,14 +1725,13 @@ export default function Dashboard() {
                                                     value={selectedAssetTickerRef.current || selectedAsset?.ticker || ''}
                                                     onChange={e => {
                                                         const ticker = e.target.value;
-                                                        const asset = assets.find(a => a.ticker === ticker);
-                                                        console.log('[User Selection] Ticker:', ticker);
-                                                        selectedAssetTickerRef.current = ticker; // Set ref FIRST
+                                                        const asset = allAssets.find(a => a.ticker === ticker);
+                                                        selectedAssetTickerRef.current = ticker;
                                                         setSelectedAsset(asset);
                                                     }}
                                                     style={{ maxWidth: '200px', borderRadius: 0 }}
                                                 >
-                                                    {assets.map(a => <option key={a.ticker} value={a.ticker}>{a.ticker}</option>)}
+                                                    {allAssets.map(a => <option key={a.ticker} value={a.ticker}>{a.ticker}</option>)}
                                                 </select>
                                             </div>
                                             {selectedAsset ? (
