@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     LogOut, TrendingUp, Wallet, Clock, Play, Activity, Layers, Search,
-    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Gavel, Radio, Zap, Landmark
+    ChevronRight, ArrowUpRight, ArrowDownRight, ShieldAlert, Shield, Gavel, Radio, Zap, Landmark
 } from 'lucide-react';
 import { getMarketState, getAssets, placeOrder, getMe, logout, nextTurn, nextQuarter, triggerShock, getAdminUsers, toggleFreezeUser, createTeamUser, getPortfolio, checkConsentStatus, openMarketplace, closeMarketplace, connectRealtime, toggleTradeApproval, migrateAssets, openCreditFacility, closeCreditFacility, resetGame, settleAllDebts, seedHistory, triggerRecovery, resetShock, setSentiment, toggleBots, getFlaggedTrades, toggleLeaderboard, getAuctionConfig, setAuctionConfig, setTeamStartingCapital, issueDividend, setInterestRate } from '../services/api';
 import univLogo from '../assets/ip.png';
@@ -31,6 +31,7 @@ import AdminBankerApprovals from '../components/AdminBankerApprovals';
 import AdminMortgageApprovals from '../components/AdminMortgageApprovals';
 import AdminSecondaryAuction from '../components/AdminSecondaryAuction';
 import PublicLeaderboard from '../components/PublicLeaderboard';
+import Treasury from '../components/Treasury';
 import { Toaster, toast } from 'sonner';
 
 export default function Dashboard() {
@@ -622,6 +623,7 @@ export default function Dashboard() {
         { id: 'auction', label: 'AUCTION HALL', icon: Gavel },
         { id: 'secondary_mkt', label: 'SECONDARY MKT', icon: Gavel },
         { id: 'credit', label: 'CREDIT NETWORK', icon: Landmark },
+        { id: 'treasury', label: 'TREASURY', icon: Shield },
         { id: 'analysis', label: 'ANALYSIS', icon: Activity },
     ];
 
@@ -1709,6 +1711,10 @@ export default function Dashboard() {
 
                                 {activeTab === 'credit' && (
                                     <CreditNetwork user={user} marketState={marketState} assets={assets} />
+                                )}
+
+                                {activeTab === 'treasury' && (
+                                    <Treasury user={user} onUpdate={fetchData} />
                                 )}
 
                                 {activeTab === 'news' && (
