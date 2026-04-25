@@ -24,6 +24,8 @@ export default function AdminPriceNudge() {
     const [newsMode, setNewsMode] = useState('auto');
     const [customNewsTitle, setCustomNewsTitle] = useState('');
     const [customNewsContent, setCustomNewsContent] = useState('');
+    const [customNewsSource, setCustomNewsSource] = useState('');
+    const [customNewsImageUrl, setCustomNewsImageUrl] = useState('');
 
     // Price auto-news template config
     const [showNewsConfig, setShowNewsConfig] = useState(false);
@@ -85,12 +87,12 @@ export default function AdminPriceNudge() {
         try {
             const adjPct = adjustmentType === 'percent' ? parseFloat(adjustmentValue) : null;
             const adjAbs = adjustmentType === 'absolute' ? parseFloat(adjustmentValue) : null;
-            const result = await nudgePrice(selectedTicker, adjPct, adjAbs, newsMode, customNewsTitle, customNewsContent);
+            const result = await nudgePrice(selectedTicker, adjPct, adjAbs, newsMode, customNewsTitle, customNewsContent, customNewsSource, customNewsImageUrl);
             let msg = `${result.ticker}: $${result.old_price.toFixed(2)} → $${result.new_price.toFixed(2)}`;
             if (result.auto_news) msg += ` — News: "${result.auto_news}"`;
             toast.success(msg);
             setAdjustmentValue('');
-            if (newsMode === 'custom') { setCustomNewsTitle(''); setCustomNewsContent(''); }
+            if (newsMode === 'custom') { setCustomNewsTitle(''); setCustomNewsContent(''); setCustomNewsSource(''); setCustomNewsImageUrl(''); }
             await loadAssets();
         } catch (error) {
             toast.error(error.response?.data?.detail || 'Failed to nudge price');
@@ -234,7 +236,13 @@ export default function AdminPriceNudge() {
                                 style={{ marginBottom: '0.5rem', fontSize: '0.85rem' }} />
                             <textarea className="input-field" placeholder="News body text" rows={3} value={customNewsContent}
                                 onChange={e => setCustomNewsContent(e.target.value)}
-                                style={{ fontSize: '0.8rem', resize: 'vertical' }} />
+                                style={{ fontSize: '0.8rem', resize: 'vertical', marginBottom: '0.5rem' }} />
+                            <input type="text" className="input-field" placeholder="Source (e.g. Reuters)" value={customNewsSource}
+                                onChange={e => setCustomNewsSource(e.target.value)}
+                                style={{ marginBottom: '0.5rem', fontSize: '0.8rem' }} />
+                            <input type="text" className="input-field" placeholder="Image URL (optional)" value={customNewsImageUrl}
+                                onChange={e => setCustomNewsImageUrl(e.target.value)}
+                                style={{ fontSize: '0.8rem' }} />
                         </div>
                     )}
                 </div>

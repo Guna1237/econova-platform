@@ -297,7 +297,7 @@ export const sellTBills = async (quantity) => {
 
 // --- ADMIN PRICE NUDGE ---
 // newsMode: 'auto' | 'custom' | 'skip'
-export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs, newsMode = 'auto', newsTitle = null, newsContent = null) => {
+export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs, newsMode = 'auto', newsTitle = null, newsContent = null, newsSource = null, newsImageUrl = null) => {
     const response = await default_api.post('/admin/price/nudge', {
         ticker,
         adjustment_pct: adjustmentPct,
@@ -305,6 +305,8 @@ export const nudgePrice = async (ticker, adjustmentPct, adjustmentAbs, newsMode 
         skip_news: newsMode === 'skip',
         news_title: newsMode === 'custom' ? newsTitle : null,
         news_content: newsMode === 'custom' ? newsContent : null,
+        news_source: newsMode === 'custom' ? newsSource : null,
+        news_image_url: newsMode === 'custom' ? newsImageUrl : null,
     });
     return response.data;
 };

@@ -160,8 +160,10 @@ class PriceNudge(BaseModel):
     adjustment_pct: Optional[float] = None
     adjustment_abs: Optional[float] = None
     skip_news: bool = False
-    news_title: Optional[str] = None   # override auto-template
-    news_content: Optional[str] = None # override auto-template
+    news_title: Optional[str] = None
+    news_content: Optional[str] = None
+    news_image_url: Optional[str] = None
+    news_source: Optional[str] = None
     
     @field_validator('ticker')
     @classmethod
@@ -1968,6 +1970,8 @@ async def nudge_asset_price(
             if nudge.news_title and nudge.news_content:
                 title = nudge.news_title
                 content = nudge.news_content
+                news_source = nudge.news_source or "Market Wire"
+                news_image = nudge.news_image_url or None
             else:
                 direction = "up" if change_pct > 0 else "down"
                 custom_config = (state.auto_news_config or {}) if state else {}
